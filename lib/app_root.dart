@@ -44,16 +44,27 @@ class _RootScreenDeciderState extends State<RootScreenDecider> {
 
   // ログイン状態を確認する関数 (UserDefaults の代わりに SharedPreferences を使用)
   Future<void> _checkLoginStatus() async {
-    final prefs = await SharedPreferences.getInstance();
-    
-    // "userDeviceInfo" キーのデータが存在するかチェック
-    final userInfo = prefs.getString('userDeviceInfo'); 
-    
-    if (mounted) { // ウィジェットがまだ画面上にあるか確認
-      setState(() {
-        _isLoggedIn = userInfo != null;
-        print("💡 [RootScreenDecider] ログイン状態: $_isLoggedIn");
-      });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // "userDeviceInfo" キーのデータが存在するかチェック
+      final userInfo = prefs.getString('userDeviceInfo'); 
+      
+      if (mounted) { // ウィジェットがまだ画面上にあるか確認
+        setState(() {
+          _isLoggedIn = userInfo != null;
+          print("💡 [RootScreenDecider] ログイン状態: $_isLoggedIn");
+        });
+      }
+    } catch (e, stackTrace) {
+      print("❌ [RootScreenDecider] ログイン状態確認エラー: $e");
+      print("❌ [RootScreenDecider] スタックトレース: $stackTrace");
+      // エラーが発生した場合は未ログインとして扱う
+      if (mounted) {
+        setState(() {
+          _isLoggedIn = false;
+        });
+      }
     }
   }
 
@@ -61,7 +72,6 @@ class _RootScreenDeciderState extends State<RootScreenDecider> {
   Widget build(BuildContext context) {
     // ログイン状態のチェック中はローディングを表示
     if (_isLoggedIn == null) {
-      // 
       return const Scaffold(
         body: Center(
           child: CircularProgressIndicator.adaptive(),
@@ -70,12 +80,33 @@ class _RootScreenDeciderState extends State<RootScreenDecider> {
     }
 
     // ログイン状態に基づき、ルートビューを切り替える
-    if (_isLoggedIn == true) {
-      // ログイン済みの場合: ContentView
-      return const ContentView();
-    } else {
-      // 未ログインの場合: LoginView
-      return LoginView(onLoginSuccess: _checkLoginStatus);
+    try {
+      if (_isLoggedIn == true) {
+        // ログイン済みの場合: ContentView
+        print("🔄 [RootScreenDecider] ContentViewを表示します");
+        return const ContentView();
+      } else {
+        // 未ログインの場合: LoginView
+        return LoginView(onLoginSuccess: _checkLoginStatus);
+      }
+    } catch (e, stackTrace) {
+      print("❌ [RootScreenDecider] ビルドエラー: $e");
+      print("❌ [RootScreenDecider] スタックトレース: $stackTrace");
+      // エラーが発生した場合はエラー画面を表示
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.red, size: 48),
+              const SizedBox(height: 16),
+              const Text('アプリの起動に失敗しました'),
+              const SizedBox(height: 8),
+              Text('エラー: $e', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            ],
+          ),
+        ),
+      );
     }
   }
 }

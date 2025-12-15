@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
@@ -660,7 +661,14 @@ Future<bool> checkPlayerNameDuplicate(String teamName, String eventId) async {
     
     try {
       debugPrint("⏳ [FirebaseService] データ取得中...");
-      final snapshot = await ref.get();
+      // タイムアウトを設定（30秒）
+      final snapshot = await ref.get().timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          debugPrint("❌ [FirebaseService] データ取得がタイムアウトしました（30秒）");
+          throw FirebaseServiceError('データ取得がタイムアウトしました。ネットワーク接続を確認してください。');
+        },
+      );
       debugPrint("📦 [FirebaseService] スナップショット取得完了");
       
       if (!snapshot.exists) {
@@ -716,7 +724,13 @@ Future<bool> checkPlayerNameDuplicate(String teamName, String eventId) async {
           // escape_recordsからレコードを取得して追加
           try {
             final recordsRef = _database!.ref().child("escape_records/$eventId");
-            final recordsSnapshot = await recordsRef.get();
+            final recordsSnapshot = await recordsRef.get().timeout(
+              const Duration(seconds: 10),
+              onTimeout: () {
+                debugPrint("⚠️ [FirebaseService] escape_records取得がタイムアウトしました (ID: $eventId)");
+                throw TimeoutException('escape_records取得タイムアウト');
+              },
+            );
             if (recordsSnapshot.exists && recordsSnapshot.value != null) {
               final recordsData = recordsSnapshot.value;
               List<EscapeRecord> escapeRecords = [];
@@ -770,6 +784,48 @@ Future<bool> checkPlayerNameDuplicate(String teamName, String eventId) async {
         debugPrint("⚠️ [FirebaseService] 警告: イベント辞書には${eventsDict.length}件のデータがあるが、パースできたイベントは0件です");
       }
       return events;
+    } on PlatformException catch (e, stackTrace) {
+      debugPrint("❌ [FirebaseService] Firebase読み込みエラー (PlatformException): $e");
+      debugPrint("❌ [FirebaseService] エラーコード: ${e.code}");
+      debugPrint("❌ [FirebaseService] エラーメッセージ: ${e.message}");
+      debugPrint("❌ [FirebaseService] スタックトレース: $stackTrace");
+      
+      // 権限エラーの場合の詳細メッセージ
+      if (e.code == 'PERMISSION_DENIED' || e.code == 'permission-denied' || e.message?.contains('Permission denied') == true) {
+        throw FirebaseServiceError(
+          'Firebase Databaseへのアクセスが拒否されました。\n'
+          'Firebase Consoleで以下の設定を確認してください：\n'
+          '1. Realtime Database → Rules で読み取り権限が設定されているか\n'
+          '2. APIキーが正しく設定されているか\n'
+          '3. プロジェクトの認証設定が正しいか',
+          code: e.code,
+        );
+      }
+      
+      throw FirebaseServiceError('Firebase Databaseからのデータ取得に失敗しました: ${e.message}', code: e.code);
+    } on FirebaseException catch (e, stackTrace) {
+      debugPrint("❌ [FirebaseService] Firebase読み込みエラー (FirebaseException): $e");
+      debugPrint("❌ [FirebaseService] エラーコード: ${e.code}");
+      debugPrint("❌ [FirebaseService] エラーメッセージ: ${e.message}");
+      debugPrint("❌ [FirebaseService] スタックトレース: $stackTrace");
+      
+      // 権限エラーの場合の詳細メッセージ
+      if (e.code == 'PERMISSION_DENIED' || e.code == 'permission-denied') {
+        throw FirebaseServiceError(
+          'Firebase Databaseへのアクセスが拒否されました。\n'
+          'Firebase Consoleで以下の設定を確認してください：\n'
+          '1. Realtime Database → Rules で読み取り権限が設定されているか\n'
+          '2. APIキーが正しく設定されているか\n'
+          '3. プロジェクトの認証設定が正しいか',
+          code: e.code,
+        );
+      }
+      
+      throw FirebaseServiceError('Firebase Databaseからのデータ取得に失敗しました: ${e.message}', code: e.code);
+    } on TimeoutException catch (e, stackTrace) {
+      debugPrint("❌ [FirebaseService] タイムアウトエラー: $e");
+      debugPrint("❌ [FirebaseService] スタックトレース: $stackTrace");
+      throw FirebaseServiceError('データ取得がタイムアウトしました。ネットワーク接続を確認してください。');
     } catch (e, stackTrace) {
       debugPrint("❌ [FirebaseService] Firebase読み込みエラー: $e");
       debugPrint("❌ [FirebaseService] エラーの型: ${e.runtimeType}");

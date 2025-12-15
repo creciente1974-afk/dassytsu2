@@ -131,6 +131,33 @@ class EventCardView extends StatelessWidget {
       debugPrint("⚠️ [EventCardView] イベント名が空です (ID: ${event.id})");
     }
     
+    // エラーハンドリング: ウィジェットの構築を安全にラップ
+    try {
+      return _buildCardContent(context);
+    } catch (e, stackTrace) {
+      debugPrint("❌ [EventCardView] buildエラー: $e");
+      debugPrint("❌ [EventCardView] スタックトレース: $stackTrace");
+      // エラーが発生した場合は、エラー表示用のカードを返す
+      return Card(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            children: [
+              const Icon(Icons.error_outline, color: Colors.red, size: 40),
+              const SizedBox(height: 8),
+              Text(
+                "イベントカードの表示に失敗しました: ${event.name}",
+                style: TextStyle(color: Colors.grey.shade700),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+  }
+  
+  Widget _buildCardContent(BuildContext context) {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       shape: RoundedRectangleBorder(
@@ -138,18 +165,23 @@ class EventCardView extends StatelessWidget {
       ),
       child: InkWell(
         onTap: () {
-          // イベント詳細画面への遷移
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => IndividualEventScreen(event: event),
-            ),
-          );
+          try {
+            // イベント詳細画面への遷移
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => IndividualEventScreen(event: event),
+              ),
+            );
+          } catch (e, stackTrace) {
+            debugPrint("❌ [EventCardView] ナビゲーションエラー: $e");
+            debugPrint("❌ [EventCardView] スタックトレース: $stackTrace");
+          }
         },
         borderRadius: BorderRadius.circular(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 画像エリア
+            // 画像エリア（エラーハンドリング付き）
             if (event.cardImageUrl != null && event.cardImageUrl!.isNotEmpty)
               ClipRRect(
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
@@ -158,27 +190,75 @@ class EventCardView extends StatelessWidget {
                   height: 180,
                   child: Stack(
                     children: [
-                      CachedNetworkImage(
-                        imageUrl: event.cardImageUrl!,
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        height: 180,
-                        placeholder: (context, url) => Container(
-                          height: 180,
-                          color: Colors.grey.shade200,
-                          child: const Center(
-                            child: CircularProgressIndicator(),
-                          ),
-                        ),
-                        errorWidget: (context, url, error) => Container(
-                          height: 180,
-                          color: Colors.grey.shade200,
-                          child: const Icon(
-                            Icons.image_not_supported,
-                            size: 50,
-                            color: Colors.grey,
-                          ),
-                        ),
+                      // CachedNetworkImageをエラーハンドリングでラップ
+                      Builder(
+                        builder: (context) {
+                          try {
+                            final imageUrl = event.cardImageUrl!;
+                            // URLの妥当性を確認
+                            final uri = Uri.tryParse(imageUrl);
+                            if (uri == null || !uri.hasScheme) {
+                              debugPrint("⚠️ [EventCardView] 無効な画像URL: $imageUrl");
+                              return Container(
+                                height: 180,
+                                color: Colors.grey.shade200,
+                                child: const Icon(
+                                  Icons.image_not_supported,
+                                  size: 50,
+                                  color: Colors.grey,
+                                ),
+                              );
+                            }
+                            return CachedNetworkImage(
+                              imageUrl: imageUrl,
+                              fit: BoxFit.cover,
+                              width: double.infinity,
+                              height: 180,
+                              placeholder: (context, url) => Container(
+                                height: 180,
+                                color: Colors.grey.shade200,
+                                child: const Center(
+                                  child: CircularProgressIndicator(),
+                                ),
+                              ),
+                              errorWidget: (context, url, error) {
+                                debugPrint("⚠️ [EventCardView] 画像読み込みエラー: $error (URL: $url)");
+                                debugPrint("⚠️ [EventCardView] エラータイプ: ${error.runtimeType}");
+                                return Container(
+                                  height: 180,
+                                  color: Colors.grey.shade200,
+                                  child: const Icon(
+                                    Icons.image_not_supported,
+                                    size: 50,
+                                    color: Colors.grey,
+                                  ),
+                                );
+                              },
+                              // メモリ使用量を制限
+                              memCacheWidth: 800,
+                              memCacheHeight: 600,
+                              maxWidthDiskCache: 1200,
+                              maxHeightDiskCache: 900,
+                              // HTTPヘッダーを追加（Firebase Storageの認証用）
+                              httpHeaders: const {
+                                'Accept': 'image/*',
+                              },
+                            );
+                          } catch (e, stackTrace) {
+                            debugPrint("❌ [EventCardView] 画像ウィジェット構築エラー: $e");
+                            debugPrint("❌ [EventCardView] エラータイプ: ${e.runtimeType}");
+                            debugPrint("❌ [EventCardView] スタックトレース: $stackTrace");
+                            return Container(
+                              height: 180,
+                              color: Colors.grey.shade200,
+                              child: const Icon(
+                                Icons.image_not_supported,
+                                size: 50,
+                                color: Colors.grey,
+                              ),
+                            );
+                          }
+                        },
                       ),
                       // ランキング1位のバッジ
                       _buildBestRecordBadge(),
@@ -958,8 +1038,22 @@ class EventListPageState extends State<EventListPage> {
   @override
   void initState() {
     super.initState();
-    // 初期ロード時は強制的に実行
-    _loadEvents(force: true);
+    try {
+      print("🔄 [EventListPage] initState() 開始");
+      // 初期ロード時は強制的に実行
+      _loadEvents(force: true);
+    } catch (e, stackTrace) {
+      debugPrint("❌ [EventListPage] initState() エラー: $e");
+      debugPrint("❌ [EventListPage] スタックトレース: $stackTrace");
+      // エラーが発生した場合はエラー状態を設定
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _showError = true;
+          _errorMessage = '初期化に失敗しました: $e';
+        });
+      }
+    }
   }
   
   // SwiftUIの sortedEvents に相当するGetter
@@ -1235,12 +1329,34 @@ class EventListPageState extends State<EventListPage> {
         itemCount: _sortedEvents.length,
         separatorBuilder: (context, index) => const SizedBox(height: 20),
         itemBuilder: (context, index) {
-          final event = _sortedEvents[index];
-          print("🎴 [EventListPage] イベントカード作成: ${event.name} (ID: ${event.id}, isVisible: ${event.isVisible})");
-          return EventCardView(
-            event: event,
-            gameOverEventId: widget.gameOverEventId,
-          );
+          try {
+            final event = _sortedEvents[index];
+            print("🎴 [EventListPage] イベントカード作成: ${event.name} (ID: ${event.id}, isVisible: ${event.isVisible})");
+            return EventCardView(
+              event: event,
+              gameOverEventId: widget.gameOverEventId,
+            );
+          } catch (e, stackTrace) {
+            debugPrint("❌ [EventListPage] イベントカード構築エラー: $e");
+            debugPrint("❌ [EventListPage] スタックトレース: $stackTrace");
+            // エラーが発生した場合は、エラー表示用のカードを返す
+            return Card(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.red, size: 40),
+                    const SizedBox(height: 8),
+                    Text(
+                      "イベントカードの読み込みに失敗しました",
+                      style: TextStyle(color: Colors.grey.shade700),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
         },
       );
     }

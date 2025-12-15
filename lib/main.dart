@@ -1,7 +1,8 @@
 // lib/main.dart
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; 
+import 'package:flutter/services.dart';
+import 'dart:ui';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'app_root.dart'; // ★★★ 新しく作成したファイルをインポート ★★★
@@ -59,6 +60,22 @@ void main() async {
   
   print("✅ [main] システム設定完了");
   
-  // 5. アプリケーションの実行 (分離した app_root.dart のクラスを呼び出す)
+  // 5. グローバルエラーハンドラーを設定（未処理のエラーをキャッチ）
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    debugPrint("❌ [FlutterError] 未処理のエラー: ${details.exception}");
+    debugPrint("❌ [FlutterError] スタックトレース: ${details.stack}");
+  };
+  
+  // 6. プラットフォーム固有のエラーハンドラー（非同期エラーなど）
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint("❌ [PlatformError] プラットフォームエラー: $error");
+    debugPrint("❌ [PlatformError] スタックトレース: $stack");
+    return true; // エラーを処理したことを示す
+  };
+  
+  print("✅ [main] エラーハンドラー設定完了");
+  
+  // 7. アプリケーションの実行 (分離した app_root.dart のクラスを呼び出す)
   runApp(const DassyutsuApp()); 
 }
