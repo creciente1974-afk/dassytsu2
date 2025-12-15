@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
-import 'hint_model.dart'; // 定義したHintモデルをインポート
+import 'lib/models/hint.dart'; // Hint モデルをインポート
 
 // SwiftのUUID生成に対応するため、'uuid' パッケージが必要です。
 // pubspec.yaml に uuid: ^latest_version を追加してください。
@@ -49,8 +49,12 @@ class _HintEditScreenState extends State<HintEditScreen> {
     _contentController = TextEditingController(
       text: widget.initialHint?.content ?? '',
     );
+    // timeOffsetは秒単位で保存されているが、UIでは分単位で表示・入力する
+    final minutes = widget.initialHint != null 
+        ? (widget.initialHint!.timeOffset / 60).round()
+        : null;
     _timeOffsetController = TextEditingController(
-      text: widget.initialHint?.timeOffset.toString() ?? '',
+      text: minutes?.toString() ?? '',
     );
     
     // TextFieldの値が変更されたらsetStateを呼び出し、保存ボタンの有効/無効を更新
@@ -78,20 +82,23 @@ class _HintEditScreenState extends State<HintEditScreen> {
       return; // バリデーションに失敗したら何もしない
     }
     
-    final int? timeOffsetInt = int.tryParse(_timeOffsetController.text);
-    if (timeOffsetInt == null) {
+    final int? minutesInt = int.tryParse(_timeOffsetController.text);
+    if (minutesInt == null || minutesInt < 0) {
       // timeOffsetのバリデーションはTextFieldのinputFormattersとvalidateでカバーされているはずだが念のため
       return;
     }
 
     final bool isNew = widget.initialHint == null;
     
+    // 分を秒に変換（timeOffsetは秒単位で保存される）
+    final int timeOffsetInSeconds = minutesInt * 60;
+    
     // Hint(id: content: timeOffset:) の作成
     final Hint updatedHint = Hint(
       // 既存IDがあればそれを使用、なければ新規UUIDを生成
       id: widget.initialHint?.id ?? _uuid.v4(),
       content: _contentController.text,
-      timeOffset: timeOffsetInt,
+      timeOffset: timeOffsetInSeconds,
     );
     
     // onSave?() の実行

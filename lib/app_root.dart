@@ -3,26 +3,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 // 必要なファイル（ContentView, LoginView）をインポート
-// import 'content_view.dart'; // ★ 実際のファイル名に合わせて修正してください ★
-// import 'login_view.dart'; // ★ 実際のファイル名に合わせて修正してください ★
-
-// --- 仮定のビュー（LoginViewとContentViewがまだない場合用） ---
-// 実際は上記のインポートが成功すれば、このダミーは不要です。
-class ContentView extends StatelessWidget {
-  const ContentView({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(body: Center(child: Text('コンテンツ画面')));
-  }
-}
-class LoginView extends StatelessWidget {
-  const LoginView({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(body: Center(child: Text('ログイン画面')));
-  }
-}
-// ----------------------------------------------------
+import 'content_view.dart';
+import 'login_view.dart';
 
 // 1. アプリケーションの基本構造 (SwiftUIの struct dassyutsuApp: App の代わり)
 class DassyutsuApp extends StatelessWidget {
@@ -93,7 +75,7 @@ class _RootScreenDeciderState extends State<RootScreenDecider> {
       return const ContentView();
     } else {
       // 未ログインの場合: LoginView
-      return const LoginView();
+      return LoginView(onLoginSuccess: _checkLoginStatus);
     }
   }
 }

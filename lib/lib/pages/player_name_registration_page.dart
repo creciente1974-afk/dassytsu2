@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/event.dart'; // Eventモデルをインポート
-import '../services/firebase_service.dart'; // FirebaseServiceをインポート（仮定）
-import 'individual_event_page.dart'; // 遷移先のページをインポート（次のステップで作成予定）
+import '../../firebase_service.dart'; // FirebaseServiceをインポート（仮定）
+import '../../game_view.dart' show GameView; // ゲームページをインポート
 
 /// プレイヤー名（チーム名）を登録するページ
 class PlayerNameRegistrationPage extends StatefulWidget {
@@ -29,7 +29,7 @@ class _PlayerNameRegistrationPageState extends State<PlayerNameRegistrationPage>
   // bool _shouldNavigateToEventDetail = false; // Flutterでは直接Navigatorで遷移
 
   // Firebase Service (仮定)
-  final FirebaseService _firebaseService = FirebaseService.instance; 
+  final FirebaseService _firebaseService = FirebaseService(); 
   
   // MARK: - Lifecycle
   
@@ -37,33 +37,40 @@ class _PlayerNameRegistrationPageState extends State<PlayerNameRegistrationPage>
   void initState() {
     super.initState();
     // 入力が変更されたときのリスナーを設定（Swiftの .onChange の代替）
-    _playerNameController.addListener(_resetDuplicateCheck);
+    _playerNameController.addListener(_onTextChanged);
   }
-
-  @override
-  void dispose() {
-    _playerNameController.removeListener(_resetDuplicateCheck);
-    _playerNameController.dispose();
-    super.dispose();
-  }
-
-  // MARK: - Logic (Swiftの registerPlayerName() に相当)
   
-  /// 入力が変更されたら重複チェック状態をリセット
-  void _resetDuplicateCheck() {
+  /// テキストが変更されたときに呼ばれる
+  void _onTextChanged() {
+    // 重複チェック状態をリセット
     if (_isNameDuplicate) {
       setState(() {
         _isNameDuplicate = false;
       });
     }
+    // ボタンの有効/無効状態を更新するために setState を呼ぶ
+    setState(() {});
   }
+
+  @override
+  void dispose() {
+    _playerNameController.removeListener(_onTextChanged);
+    _playerNameController.dispose();
+    super.dispose();
+  }
+
+  // MARK: - Logic (Swiftの registerPlayerName() に相当)
 
   /// プレイヤー名を登録し、重複チェックを行う
   Future<void> _registerPlayerName() async {
+    print("🚀 [PlayerNameRegistration] _registerPlayerName() が呼ばれました");
+    
     final trimmedName = _playerNameController.text.trim();
+    print("📝 [PlayerNameRegistration] 入力された名前: '$trimmedName'");
     
     // 空文字チェック
     if (trimmedName.isEmpty) {
+      print("⚠️ [PlayerNameRegistration] 名前が空です");
       _showAlertDialog("名前を入力してください");
       return;
     }
@@ -77,48 +84,114 @@ class _PlayerNameRegistrationPageState extends State<PlayerNameRegistrationPage>
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      _isNameDuplicate = false;
     });
 
     try {
+      print("🔄 [PlayerNameRegistration] プレイヤー名登録開始: $trimmedName");
+      
       // 1. 重複チェック（Firebase Serviceが実装されている前提）
       // Swift: await firebaseService.checkPlayerNameDuplicate(...)
+      print("🔍 [PlayerNameRegistration] 重複チェック中...");
       final isDuplicate = await _firebaseService.checkPlayerNameDuplicate(
-        playerName: trimmedName,
-        eventId: widget.event.id, // DartモデルではidはString
+        trimmedName,
+        widget.event.id, // DartモデルではidはString
       );
+
+      print("✅ [PlayerNameRegistration] 重複チェック完了: $isDuplicate");
 
       if (isDuplicate) {
         // 2. 重複あり
-        setState(() {
-          _isNameDuplicate = true;
-          _isLoading = false;
-        });
+        print("⚠️ [PlayerNameRegistration] 名前が重複しています");
+        if (mounted) {
+          setState(() {
+            _isNameDuplicate = true;
+            _isLoading = false;
+          });
+        }
       } else {
         // 3. 登録成功
+        print("✅ [PlayerNameRegistration] 名前が登録可能です。保存中...");
+        
+        // イベントに問題が設定されているかチェック
+        if (widget.event.problems.isEmpty) {
+          print("⚠️ [PlayerNameRegistration] イベントに問題が設定されていません");
+          if (mounted) {
+            _showAlertDialog("このイベントには問題が設定されていません。管理者に問い合わせてください。");
+            setState(() {
+              _isLoading = false;
+            });
+          }
+          return;
+        }
         
         // 名前を保存 (UserDefaultsの代替)
         final prefs = await SharedPreferences.getInstance();
         final key = "playerName_${widget.event.id}";
         await prefs.setString(key, trimmedName);
+        print("💾 [PlayerNameRegistration] プレイヤー名を保存しました: $key = $trimmedName");
         
-        // IndividualEventPageへ遷移 (Swiftの navigationDestination に相当)
+        // GameView（ゲームページ）へ遷移
         if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => IndividualEventPage(
-                event: widget.event,
-                // IndividualEventPageに登録された名前を渡す
-                playerName: trimmedName, 
+          print("🚀 [PlayerNameRegistration] GameViewへ遷移します");
+          print("   - Event ID: ${widget.event.id}");
+          print("   - Event Name: ${widget.event.name}");
+          print("   - Team ID: $trimmedName");
+          print("   - Problems Count: ${widget.event.problems.length}");
+          
+          try {
+            // 少し遅延を入れて、状態更新が完了してから遷移
+            await Future.delayed(const Duration(milliseconds: 100));
+            
+            if (!mounted) {
+              print("⚠️ [PlayerNameRegistration] Widgetがアンマウントされました");
+              return;
+            }
+            
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (context) {
+                  print("📱 [PlayerNameRegistration] GameViewを構築中...");
+                  try {
+                    final gameView = GameView(
+                      event: widget.event,
+                      teamId: trimmedName, // 登録されたプレイヤー名をteamIdとして使用
+                    );
+                    print("✅ [PlayerNameRegistration] GameViewの構築が完了しました");
+                    return gameView;
+                  } catch (buildError) {
+                    print("❌ [PlayerNameRegistration] GameViewの構築エラー: $buildError");
+                    return Scaffold(
+                      appBar: AppBar(title: const Text("エラー")),
+                      body: Center(
+                        child: Text("ゲーム画面の読み込みに失敗しました: $buildError"),
+                      ),
+                    );
+                  }
+                },
               ),
-            ),
-          );
+            );
+            print("✅ [PlayerNameRegistration] 画面遷移が完了しました");
+          } catch (navError, stackTrace) {
+            print("❌ [PlayerNameRegistration] 画面遷移エラー: $navError");
+            print("📚 [PlayerNameRegistration] スタックトレース: $stackTrace");
+            if (mounted) {
+              _showAlertDialog("画面遷移に失敗しました: $navError");
+              setState(() {
+                _isLoading = false;
+              });
+            }
+          }
+        } else {
+          print("⚠️ [PlayerNameRegistration] Widgetがマウントされていません");
         }
       }
-    } catch (error) {
+    } catch (error, stackTrace) {
       // 4. エラー処理
-      _showAlertDialog(error.toString());
-    } finally {
+      print("❌ [PlayerNameRegistration] エラー発生: $error");
+      print("📚 [PlayerNameRegistration] スタックトレース: $stackTrace");
       if (mounted) {
+        _showAlertDialog("エラーが発生しました: $error");
         setState(() {
           _isLoading = false;
         });
@@ -247,37 +320,52 @@ class _PlayerNameRegistrationPageState extends State<PlayerNameRegistrationPage>
             const SizedBox(height: 40),
 
             // 登録ボタン
-            ElevatedButton(
-              onPressed: _playerNameController.text.trim().isEmpty || _isLoading
-                  ? null
-                  : _registerPlayerName,
-              style: ElevatedButton.styleFrom(
-                // ボタンの無効化状態の色もSwiftに合わせるために調整可能
-                backgroundColor: _playerNameController.text.trim().isEmpty || _isLoading
-                    ? Colors.grey // 無効時の色
-                    : Colors.blue, // 有効時の色
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.all(16.0),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: _isLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : const Text(
-                      "登録して開始",
-                      style: TextStyle(
-                        fontSize: 18, // headline 相当
-                        fontWeight: FontWeight.w600, // semibold 相当
-                      ),
+            Builder(
+              builder: (context) {
+                final isButtonEnabled = _playerNameController.text.trim().isNotEmpty && !_isLoading;
+                
+                return ElevatedButton(
+                  onPressed: isButtonEnabled ? () {
+                    print("🔘 [PlayerNameRegistration] ボタンが押されました");
+                    print("   - テキスト: '${_playerNameController.text}'");
+                    print("   - トリム後: '${_playerNameController.text.trim()}'");
+                    print("   - 空かどうか: ${_playerNameController.text.trim().isEmpty}");
+                    print("   - ローディング中: $_isLoading");
+                    print("   - ボタン有効: $isButtonEnabled");
+                    
+                    _registerPlayerName();
+                  } : null,
+                  style: ElevatedButton.styleFrom(
+                    // ボタンの無効化状態の色もSwiftに合わせるために調整可能
+                    backgroundColor: isButtonEnabled
+                        ? Colors.blue // 有効時の色
+                        : Colors.grey, // 無効時の色
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.all(16.0),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
+                    disabledBackgroundColor: Colors.grey,
+                    disabledForegroundColor: Colors.white70,
+                  ),
+                  child: _isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text(
+                          "登録して開始",
+                          style: TextStyle(
+                            fontSize: 18, // headline 相当
+                            fontWeight: FontWeight.w600, // semibold 相当
+                          ),
+                        ),
+                );
+              },
             ),
             
             const Spacer(),

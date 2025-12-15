@@ -2,18 +2,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'dart:io';
+import 'package:uuid/uuid.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // 必要なサービスとモデルのインポート
 // EscapeRecord, Event, FirebaseServiceError などのクラスが必要です。
-import '../models.dart'; 
-import '../services/firebase_service.dart';
+import '../../lib/models/event.dart'; // 正規のEventモデル
+import '../../firebase_service.dart';
 import '../services/firebase_service_error.dart';
+import '../models/escape_record.dart';
 
 // ⚠️ 注意: 以下のクラス/関数は、別途定義が必要です。
 // 1. IndividualEventPage (遷移先の画面)
 // 2. EscapeRecord (データモデル)
 // 3. ShareManager, ViewSnapshotHelper (シェア機能のヘルパー)
 //    - Flutterでは 'share_plus' パッケージや 'screenshot' パッケージ等で代用します。
+
+// シェア機能のインポート
+import '../utils/share_manager.dart';
+import '../utils/view_snapshot_helper.dart';
+import 'dart:typed_data';
 
 class ClearPage extends StatefulWidget {
   final String eventName;
@@ -53,7 +61,10 @@ class _ClearPageState extends State<ClearPage> {
   
   // プレイヤー名 (Swiftの UserDefaults.standard.string(forKey: key) に相当)
   // 実際には shared_preferences パッケージなどを使って非同期で取得する
-  String? _playerName; 
+  String? _playerName;
+  
+  // 画面キャプチャ用のGlobalKey
+  final GlobalKey _captureKey = GlobalKey(); 
   
   @override
   void initState() {
@@ -110,12 +121,7 @@ class _ClearPageState extends State<ClearPage> {
       );
       
       // 2. Firebaseに保存
-      // ⚠️ _firebaseService.addEscapeRecord は別途実装が必要です
-      // try await _firebaseService.addEscapeRecord(record, toEventId: widget.eventId);
-
-      // 🚨 [重要] FirebaseServiceに addEscapeRecord メソッドを追加する必要があります
-      // ここでは、メソッドが存在することを前提として、一時的なスタブ処理を行います。
-      await Future.delayed(const Duration(milliseconds: 500)); // APIコールをシミュレート
+      await _firebaseService.addEscapeRecord(record, eventId: widget.eventId);
       
       if (mounted) {
         setState(() {
@@ -151,10 +157,9 @@ class _ClearPageState extends State<ClearPage> {
     });
     
     // 1. UserDefaultsにチェック済みフラグと時間を保存 (shared_preferencesで代用)
-    // 実際には SharedPreferences を使用
-    // final prefs = await SharedPreferences.getInstance();
-    // prefs.setBool('clearChecked_${widget.eventId}', true);
-    // prefs.setDouble('escapeTime_${widget.eventId}', widget.escapeTime);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('clearChecked_${widget.eventId}', true);
+    await prefs.setDouble('escapeTime_${widget.eventId}', widget.escapeTime);
     
     try {
       // 2. イベント情報を取得 (getAllEventsは既にFirebaseServiceにある前提)
@@ -194,31 +199,61 @@ class _ClearPageState extends State<ClearPage> {
     }
   }
   
-  // MARK: - シェア機能（Flutterの代用スタブ）
+  // MARK: - シェア機能
   
   // Swiftの generateShareImage() / shareToAll() に相当
-  void _shareToAll() {
-    // 実際には 'screenshot' や 'share_plus' パッケージを使用
-
-    // 1. 共有するテキストを作成
-    var text = "「${widget.eventName}」をクリアしました！\n";
-    text += "脱出タイム: ${_formatTime(widget.escapeTime)}\n";
-    if (_playerName != null) {
-      text += "プレイヤー: $_playerName\n";
-    }
-    
-    // 2. スクリーンショットを生成し、シェアシートを開く処理をここに記述
-    // 例: ScreenshotController.capture().then((Uint8List? imageBytes) {
-    //   if (imageBytes != null) {
-    //     // share_plusを使って画像とテキストをシェア
-    //   }
-    // });
-    
-    // デモとしてシェアテキストをデバッグ出力
-    if (kDebugMode) {
-      print("--- Share Content ---");
-      print(text);
-      print("--- Share Logic Stub ---");
+  Future<void> _shareToAll() async {
+    try {
+      // 1. 共有するテキストを作成
+      var text = "「${widget.eventName}」をクリアしました！\n";
+      text += "脱出タイム: ${_formatTime(widget.escapeTime)}\n";
+      if (_playerName != null) {
+        text += "プレイヤー: $_playerName\n";
+      }
+      
+      // 2. 画面をキャプチャして画像を取得
+      if (mounted) {
+        final imageBytes = await ViewSnapshotHelper.snapshotWidget(
+          key: _captureKey,
+          pixelRatio: 3.0,
+        );
+        
+        if (imageBytes != null && imageBytes.isNotEmpty) {
+          // 3. 画像とテキストを同時にシェア
+          await ShareManager.shared.shareContent(
+            imageBytes: imageBytes,
+            text: text,
+            context: context,
+            onComplete: (completed) {
+              if (kDebugMode) {
+                print("シェア完了: $completed");
+              }
+            },
+          );
+        } else {
+          // 画像キャプチャに失敗した場合はテキストのみシェア
+          if (kDebugMode) {
+            print("画像キャプチャに失敗したため、テキストのみシェアします");
+          }
+          await ShareManager.shared.shareText(
+            text: text,
+            context: context,
+          );
+        }
+      }
+    } catch (e) {
+      // エラーが発生した場合はユーザーに通知
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('シェアに失敗しました: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      if (kDebugMode) {
+        print("シェアエラー: $e");
+      }
     }
   }
 
@@ -233,21 +268,24 @@ class _ClearPageState extends State<ClearPage> {
       ),
       
       // SwiftUIの Alert に相当
-      body: Builder(
-        builder: (context) {
-          if (_showError) {
-            // エラー表示後、自動で閉じるか、OKボタンでdismiss()を呼ぶ処理を実装
-            // 🚨 今回はAlertDialogとして処理
-            Future.microtask(() => _showAlert(context));
-          }
-          
-          // Swiftの VStack(spacing: 30) に相当
-          return SingleChildScrollView(
-            child: SizedBox(
-              height: MediaQuery.of(context).size.height - (Scaffold.of(context).appBarMaxHeight ?? 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+      // RepaintBoundaryで画面全体を囲んでキャプチャ可能にする
+      body: RepaintBoundary(
+        key: _captureKey,
+        child: Builder(
+          builder: (context) {
+            if (_showError) {
+              // エラー表示後、自動で閉じるか、OKボタンでdismiss()を呼ぶ処理を実装
+              // 🚨 今回はAlertDialogとして処理
+              Future.microtask(() => _showAlert(context));
+            }
+            
+            // Swiftの VStack(spacing: 30) に相当
+            return SingleChildScrollView(
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height - (Scaffold.of(context).appBarMaxHeight ?? 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
                   const Spacer(),
 
                   // 脱出成功アイコン (ZStackに相当)
@@ -325,11 +363,12 @@ class _ClearPageState extends State<ClearPage> {
                   _buildShareSection(),
                   
                   const Spacer(),
-                ],
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

@@ -7,8 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart'; // UserDefaultsの�
 import 'package:device_info_plus/device_info_plus.dart'; // 端末情報取得の代替 (pubspec.yamlに追加が必要)
 
 // 必要なサービスとモデルのインポート
-import '../services/firebase_service.dart';
-import '../models.dart'; // UserDeviceInfo, FirebaseServiceError などが含まれることを想定
+import '../../firebase_service.dart';
+import '../../models.dart'; // UserDeviceInfo, FirebaseServiceError などが含まれることを想定
 import '../services/firebase_service_error.dart'; 
 
 // 🚨 必要なダミーモデル/ページ (別途定義が必要)
@@ -85,7 +85,7 @@ class _LoginPageState extends State<LoginPage> {
       
       // 2. Firebaseに保存 (saveUserDeviceInfoはFirebaseServiceに定義が必要です)
       // ⚠️ _firebaseService.saveUserDeviceInfo は別途実装が必要です
-      await _firebaseService.saveUserDeviceInfo(deviceInfo); 
+      // await _firebaseService.saveUserDeviceInfo(deviceInfo); // コメントアウト（未実装のため） 
       
       // 3. UserDefaultsにも保存 (shared_preferencesで代替)
       final prefs = await SharedPreferences.getInstance();

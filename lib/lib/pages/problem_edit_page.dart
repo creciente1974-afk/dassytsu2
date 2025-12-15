@@ -1,73 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart'; // カメラ・ギャラリー連携用
 import 'dart:io'; // File型を使うためにインポート
-import '../models/problem.dart'; // Problem, Hint モデル
-import '../services/firebase_service.dart'; // Firebase Service
-
-// 遷移先の画面（ここでは実装を省略し、仮のウィジェットを使用します）
-class MediaUploadPage extends StatelessWidget {
-  final ValueChanged<String> onMediaUrlSet;
-  final String? eventId;
-  final String? problemId;
-
-  const MediaUploadPage({
-    required this.onMediaUrlSet,
-    this.eventId,
-    this.problemId,
-    super.key,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("メディアアップロード")),
-      body: Center(
-        child: ElevatedButton(
-          onPressed: () {
-            // ダミーのメディアURLを返す
-            onMediaUrlSet("https://example.com/media/sample.mp4");
-            Navigator.pop(context);
-          },
-          child: const Text("ダミーURLをセットして閉じる"),
-        ),
-      ),
-    );
-  }
-}
-
-// ヒント編集画面（ここでは実装を省略し、仮のウィジェットを使用します）
-class HintEditPage extends StatelessWidget {
-  final Hint? hint;
-  final ValueChanged<Hint> onSave;
-
-  const HintEditPage({
-    this.hint,
-    required this.onSave,
-    super.key,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(hint == null ? "新規ヒント" : "ヒント編集")),
-      body: Center(
-        child: ElevatedButton(
-          onPressed: () {
-            // ダミーのヒントを保存
-            onSave(Hint(
-              id: hint?.id ?? UniqueKey().toString(),
-              content: hint?.content ?? "新しいヒント内容",
-              timeOffset: hint?.timeOffset ?? 10,
-            ));
-            Navigator.pop(context);
-          },
-          child: const Text("ヒントを保存して閉じる"),
-        ),
-      ),
-    );
-  }
-}
-
+import 'package:cached_network_image/cached_network_image.dart'; // ネットワーク画像キャッシュ
+import 'package:video_player/video_player.dart'; // 動画プレイヤー
+import '../models/problem.dart'; // Problem モデル
+import '../models/hint.dart'; // Hint モデル
+import '../../firebase_service.dart'; // Firebase Service
+import '../../hint_edit_screen.dart'; // HintEditScreen
+import 'media_upload_page.dart'; // 独立したメディアアップロードページ
 
 class ProblemEditPage extends StatefulWidget {
   // Swiftの problemBinding: Binding<Problem>? に相当
@@ -102,14 +42,19 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
   bool _isUploadingCheckImage = false;
   
   String? _uploadError;
+  
+  // 新規作成時にも問題IDを保持するため
+  late String _problemId;
 
-  final FirebaseService _firebaseService = FirebaseService.instance;
+  final FirebaseService _firebaseService = FirebaseService();
 
   // MARK: - Lifecycle (Swiftの init と onAppear の代替)
   
   @override
   void initState() {
     super.initState();
+    // 新規作成時は問題IDを生成、既存の場合は既存のIDを使用
+    _problemId = widget.initialProblem?.id ?? UniqueKey().toString();
     _loadProblemData();
   }
 
@@ -149,7 +94,8 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
       return;
     }
 
-    final problemId = widget.initialProblem?.id ?? UniqueKey().toString(); // FlutterではUUIDの代わりにUniqueKey().toString()を使用
+    // initStateで生成した問題IDを使用
+    final problemId = _problemId;
     
     final updatedProblem = Problem(
       id: problemId,
@@ -182,27 +128,27 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
     });
   }
 
-  /// ヒント編集画面へ遷移 (sheet)
+  /// ヒント編集画面へ遷移
   void _openHintEditPage({Hint? hint}) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => HintEditPage(
-        hint: hint,
-        onSave: (updatedHint) {
-          if (hint == null) {
-            // 新規追加
-            _addHint(updatedHint);
-          } else {
-            // 既存の編集
-            setState(() {
-              final index = _hints.indexWhere((h) => h.id == updatedHint.id);
-              if (index != -1) {
-                _hints[index] = updatedHint;
-              }
-            });
-          }
-        },
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => HintEditScreen(
+          initialHint: hint,
+          onSave: (updatedHint, isNew) {
+            if (isNew) {
+              // 新規追加
+              _addHint(updatedHint);
+            } else {
+              // 既存の編集
+              setState(() {
+                final index = _hints.indexWhere((h) => h.id == updatedHint.id);
+                if (index != -1) {
+                  _hints[index] = updatedHint;
+                }
+              });
+            }
+          },
+        ),
       ),
     );
   }
@@ -214,7 +160,8 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
       _showErrorAlert("イベントIDが設定されていません");
       return;
     }
-    final problemId = widget.initialProblem?.id ?? UniqueKey().toString();
+    // initStateで生成した問題IDを使用
+    final problemId = _problemId;
 
     setState(() {
       _isUploadingCheckImage = true;
@@ -224,8 +171,8 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
     try {
       final imageURL = await _firebaseService.uploadReferenceImage(
         imageFile,
-        eventId: eventId,
-        problemId: problemId,
+        eventId,
+        problemId,
       );
 
       setState(() {
@@ -322,17 +269,26 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
             title: const Text("写真または動画をアップロード"),
             trailing: const Icon(Icons.chevron_right),
             onTap: () {
+              // イベントIDが設定されているか確認
+              if (widget.eventId == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('イベントIDが設定されていません')),
+                );
+                return;
+              }
               // MediaUploadViewへの遷移
+              final mediaURLNotifier = ValueNotifier<String>(_mediaURLController.text);
+              mediaURLNotifier.addListener(() {
+                setState(() {
+                  _mediaURLController.text = mediaURLNotifier.value;
+                });
+              });
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => MediaUploadPage(
-                    onMediaUrlSet: (url) {
-                      setState(() {
-                        _mediaURLController.text = url;
-                      });
-                    },
-                    eventId: widget.eventId,
-                    problemId: widget.initialProblem?.id,
+                    mediaURLNotifier: mediaURLNotifier,
+                    eventId: widget.eventId!,
+                    problemId: _problemId,
                   ),
                 ),
               );
@@ -345,13 +301,8 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text("プレビュー", style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-                  // 実際には動画/画像をロードするウィジェット (MediaViewの代替)
-                  Container(
-                    height: 200,
-                    color: Colors.grey[200],
-                    alignment: Alignment.center,
-                    child: const Text("メディアプレビュー (Image/Video Player)", style: TextStyle(color: Colors.grey)),
-                  ),
+                  const SizedBox(height: 8),
+                  _buildMediaPreview(_mediaURLController.text),
                 ],
               ),
             )
@@ -433,11 +384,16 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
                 
                 // 見本画像プレビュー
                 if (_checkImageURLController.text.isNotEmpty)
-                  Container(
-                    alignment: Alignment.center,
-                    height: 200,
-                    color: Colors.grey[200],
-                    child: Text("見本画像プレビュー (${_checkImageURLController.text})", style: TextStyle(color: Colors.grey)),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("見本画像プレビュー", style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                        const SizedBox(height: 8),
+                        _buildCheckImagePreview(_checkImageURLController.text),
+                      ],
+                    ),
                   ),
               ],
             )
@@ -528,6 +484,269 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
       ),
     );
   }
+
+  // MARK: - Media Preview Widgets
+
+  /// メディアタイプを判定する
+  MediaType _determineMediaType(String url) {
+    if (url.isEmpty) return MediaType.unknown;
+
+    final lowercased = url.toLowerCase();
+
+    // YouTubeのURLをチェック
+    if (lowercased.contains("youtube.com") || lowercased.contains("youtu.be")) {
+      return MediaType.youtube;
+    }
+    // 動画ファイル形式をチェック
+    else if (lowercased.contains(".mp4") ||
+        lowercased.contains(".mov") ||
+        lowercased.contains(".m4v") ||
+        lowercased.contains(".avi") ||
+        lowercased.contains(".webm") ||
+        lowercased.contains("video")) {
+      return MediaType.video;
+    }
+    // 画像ファイル形式をチェック
+    else if (lowercased.contains(".jpg") ||
+        lowercased.contains(".jpeg") ||
+        lowercased.contains(".png") ||
+        lowercased.contains(".gif") ||
+        lowercased.contains(".webp") ||
+        lowercased.contains(".svg") ||
+        lowercased.contains("image")) {
+      return MediaType.image;
+    }
+    // HTTP/HTTPSで始まるURLはデフォルトで画像として扱う
+    else if (url.startsWith("http://") || url.startsWith("https://")) {
+      return MediaType.image;
+    }
+    
+    return MediaType.unknown;
+  }
+
+  /// メディアプレビューウィジェットを構築
+  Widget _buildMediaPreview(String mediaURL) {
+    final mediaType = _determineMediaType(mediaURL);
+    
+    switch (mediaType) {
+      case MediaType.image:
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: CachedNetworkImage(
+            imageUrl: mediaURL,
+            fit: BoxFit.contain,
+            height: 200,
+            width: double.infinity,
+            placeholder: (context, url) => Container(
+              height: 200,
+              color: Colors.grey[200],
+              child: const Center(child: CircularProgressIndicator()),
+            ),
+            errorWidget: (context, url, error) => Container(
+              height: 200,
+              color: Colors.grey[200],
+              child: const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.error_outline, color: Colors.grey, size: 40),
+                    SizedBox(height: 8),
+                    Text("画像の読み込みに失敗しました", style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      
+      case MediaType.video:
+        return _VideoPreviewWidget(videoURL: mediaURL);
+      
+      case MediaType.youtube:
+        return Container(
+          height: 200,
+          color: Colors.grey[200],
+          child: const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.play_circle_outline, color: Colors.grey, size: 40),
+                SizedBox(height: 8),
+                Text("YouTube動画", style: TextStyle(color: Colors.grey)),
+              ],
+            ),
+          ),
+        );
+      
+      case MediaType.unknown:
+      default:
+        return Container(
+          height: 200,
+          color: Colors.grey[200],
+          child: const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.help_outline, color: Colors.grey, size: 40),
+                SizedBox(height: 8),
+                Text("メディアタイプが不明です", style: TextStyle(color: Colors.grey)),
+              ],
+            ),
+          ),
+        );
+    }
+  }
+
+  /// 見本画像プレビューウィジェットを構築
+  Widget _buildCheckImagePreview(String imageURL) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: CachedNetworkImage(
+        imageUrl: imageURL,
+        fit: BoxFit.contain,
+        height: 200,
+        width: double.infinity,
+        placeholder: (context, url) => Container(
+          height: 200,
+          color: Colors.grey[200],
+          child: const Center(child: CircularProgressIndicator()),
+        ),
+        errorWidget: (context, url, error) => Container(
+          height: 200,
+          color: Colors.grey[200],
+          child: const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.error_outline, color: Colors.grey, size: 40),
+                SizedBox(height: 8),
+                Text("画像の読み込みに失敗しました", style: TextStyle(color: Colors.grey)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// MARK: - Media Type Enum
+
+enum MediaType {
+  image,
+  video,
+  youtube,
+  unknown,
+}
+
+// MARK: - Video Preview Widget
+
+class _VideoPreviewWidget extends StatefulWidget {
+  final String videoURL;
+
+  const _VideoPreviewWidget({required this.videoURL});
+
+  @override
+  State<_VideoPreviewWidget> createState() => _VideoPreviewWidgetState();
+}
+
+class _VideoPreviewWidgetState extends State<_VideoPreviewWidget> {
+  VideoPlayerController? _controller;
+  bool _isLoading = true;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeVideo();
+  }
+
+  Future<void> _initializeVideo() async {
+    try {
+      final url = Uri.parse(widget.videoURL);
+      _controller = VideoPlayerController.networkUrl(url);
+      await _controller!.initialize();
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _hasError = true;
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Container(
+        height: 200,
+        color: Colors.grey[200],
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_hasError || _controller == null) {
+      return Container(
+        height: 200,
+        color: Colors.grey[200],
+        child: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, color: Colors.grey, size: 40),
+              SizedBox(height: 8),
+              Text("動画の読み込みに失敗しました", style: TextStyle(color: Colors.grey)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        height: 200,
+        color: Colors.black,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            AspectRatio(
+              aspectRatio: _controller!.value.aspectRatio,
+              child: VideoPlayer(_controller!),
+            ),
+            IconButton(
+              icon: Icon(
+                _controller!.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                color: Colors.white,
+                size: 48,
+              ),
+              onPressed: () {
+                setState(() {
+                  if (_controller!.value.isPlaying) {
+                    _controller!.pause();
+                  } else {
+                    _controller!.play();
+                  }
+                });
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // MARK: - HintRow (Swiftの HintRow に相当)
@@ -551,7 +770,7 @@ class HintRow extends StatelessWidget {
         children: [
           Text(hint.content, style: Theme.of(context).textTheme.bodyMedium),
           Text(
-            "${hint.timeOffset}分後に表示",
+            "${(hint.timeOffset / 60).round()}分後に表示",
             style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
           ),
         ],

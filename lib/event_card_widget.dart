@@ -166,7 +166,7 @@ class _EventCardState extends State<EventCard> {
     );
 
     Widget imageWidget;
-    final imageUrl = widget.event.card_image_url;
+    final imageUrl = widget.event.cardImageUrl;
 
     if (imageUrl != null && imageUrl.isNotEmpty) {
       // AsyncImage / cached_network_image に相当
@@ -375,7 +375,7 @@ class EventListScreen extends StatelessWidget {
       name: "伝説の地下迷宮からの脱出",
       problems: List.generate(5, (index) => Problem(id: index.toString(), text: "P$index", answer: "A$index")),
       duration: 60,
-      card_image_url: "https://example.com/some_image.jpg", // 適切なURLに置き換えてください
+      cardImageUrl: "https://example.com/some_image.jpg", // 適切なURLに置き換えてください
       eventDate: DateTime.now().add(const Duration(days: 30)),
       comment: "史上最高の難易度！クリアできるかな？",
       records: [

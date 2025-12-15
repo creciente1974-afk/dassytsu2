@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import '../../event_list_page.dart';
 
 class GameOverPage extends StatelessWidget {
   // Swiftの let eventName: String に相当
   final String eventName;
+  final String eventId;
 
   const GameOverPage({
     required this.eventName,
+    required this.eventId,
     super.key,
   });
 
@@ -62,9 +65,14 @@ class GameOverPage extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(left: 40, right: 40, bottom: 40),
             child: ElevatedButton.icon(
-              // Swiftの dismiss() に相当: Navigatorを使って現在の画面を閉じる
+              // イベント一覧ページに戻る（ゲームオーバーになったイベントIDを渡す）
               onPressed: () {
-                Navigator.of(context).pop();
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(
+                    builder: (context) => EventListPage(gameOverEventId: eventId),
+                  ),
+                  (Route<dynamic> route) => false, // スタックを全てクリア
+                );
               },
               icon: const Icon(Icons.home, color: Colors.white), // house.fill
               label: const Text(

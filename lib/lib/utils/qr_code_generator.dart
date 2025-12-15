@@ -1,6 +1,7 @@
 // lib/utils/qr_code_generator.dart
 
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart'; // UUIDオブジェクトの利用
 import 'package:intl/intl.dart'; // 日付フォーマットの利用 (ISO8601DateFormatterの代替)
 

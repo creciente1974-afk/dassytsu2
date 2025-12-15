@@ -1,6 +1,7 @@
 // lib/pages/reception_page.dart
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,17 +11,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 // 必要なモデルとページのインポート
 import '../models/event.dart'; 
-// import 'player_name_registration_page.dart'; // 遷移先のページ（別途作成が必要）
-
-// ダミーページ定義
-class PlayerNameRegistrationPage extends StatelessWidget {
-  final Event event;
-  const PlayerNameRegistrationPage({super.key, required this.event});
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(appBar: AppBar(title: const Text("プレイヤー名登録")), body: Center(child: Text("${event.title} 登録画面")));
-  }
-}
+import 'player_name_registration_page.dart'; // 遷移先のページ
 
 // --------------------------------------------------------------------------
 // ReceptionPage
@@ -171,7 +162,7 @@ class _ReceptionPageState extends State<ReceptionPage> {
               Column(
                 children: [
                   Text(
-                    widget.event.title, // Swiftの event.name に相当
+                    widget.event.name, // Swiftの event.name に相当
                     style: Theme.of(context).textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.bold),
                     textAlign: TextAlign.center,
                   ),
@@ -369,5 +360,3 @@ class _QRCodeScannerWidgetState extends State<QRCodeScannerWidget> {
     );
   }
 }
-
-import 'package:flutter/services.dart'; // HapticFeedbackのために追加

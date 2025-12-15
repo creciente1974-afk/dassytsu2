@@ -4,57 +4,13 @@ import 'package:video_player/video_player.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibration/vibration.dart';
-
-// ===============================================
-// 1. データモデルの定義 (Swiftコードで利用されている構造体)
-// ===============================================
-
-class Hint {
-  final String id;
-  final String content;
-  final int timeOffset; // minutes
-
-  Hint({required this.id, required this.content, required this.timeOffset});
-}
-
-class Problem {
-  final String id;
-  final String? text;
-  final String mediaURL;
-  final String answer;
-  final List<Hint> hints;
-  final bool requiresCheck;
-  final String? checkText;
-  final String? checkImageURL;
-
-  Problem({
-    required this.id,
-    this.text,
-    required this.mediaURL,
-    required this.answer,
-    required this.hints,
-    this.requiresCheck = false,
-    this.checkText,
-    this.checkImageURL,
-  });
-}
-
-class Event {
-  final String id;
-  final String name;
-  final List<Problem> problems;
-  final int duration; // minutes
-  final String? targetObjectText;
-  // ... 他のフィールドは省略 ...
-
-  Event({
-    required this.id,
-    required this.name,
-    required this.problems,
-    required this.duration,
-    this.targetObjectText,
-  });
-}
+import 'lib/models/event.dart';
+import 'lib/models/problem.dart';
+import 'lib/models/hint.dart';
+import 'lib/pages/clear_page.dart';
+import 'lib/pages/camera_check_page.dart';
+import 'lib/pages/game_over_page.dart';
+import 'individual_event_screen.dart';
 
 // プレースホルダークラス (FirebaseServiceの代替)
 class FirebaseService {
@@ -63,89 +19,10 @@ class FirebaseService {
   // 実際のFirebaseロジックは実装されていません
 }
 
-// プレースホルダー画面
-class ClearView extends StatelessWidget {
-  final String eventName;
-  final String eventId;
-  final double escapeTime;
+// ClearViewはClearPageに置き換えられました
+// GameOverViewはGameOverPageに置き換えられました
 
-  const ClearView({required this.eventName, required this.eventId, required this.escapeTime, super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('クリア！')),
-      body: Center(
-        child: Text('$eventName をクリアしました。\n脱出時間: ${escapeTime.toStringAsFixed(2)}秒'),
-      ),
-    );
-  }
-}
-
-class GameOverView extends StatelessWidget {
-  final String eventName;
-  const GameOverView({required this.eventName, super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('ゲームオーバー')),
-      body: Center(
-        child: Text('$eventName は時間切れです...'),
-      ),
-    );
-  }
-}
-
-class CameraCheckView extends StatelessWidget {
-  final Problem problem;
-  final String eventId;
-  final int problemIndex;
-  final String teamId;
-  final VoidCallback onApproved;
-  final VoidCallback onRejected;
-
-  const CameraCheckView({
-    required this.problem,
-    required this.eventId,
-    required this.problemIndex,
-    required this.teamId,
-    required this.onApproved,
-    required this.onRejected,
-    super.key,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('画像認証')),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text('問題 ${problemIndex + 1}: ${problem.checkText ?? '画像を撮影してください'}'),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () {
-                // ここでカメラを起動し、認証ロジックを実行する
-                // 仮の処理として、認証成功をコールバック
-                onApproved();
-              },
-              child: const Text('撮影して認証'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                onRejected(); // 認証を拒否（シートを閉じても何も起こらない）
-              },
-              child: const Text('キャンセル'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// CameraCheckViewは削除され、CameraCheckPageを使用します
 
 
 // ===============================================
@@ -176,14 +53,31 @@ class _GameViewState extends State<GameView> {
 
   final TextEditingController _answerController = TextEditingController();
 
-  Problem get _currentProblem => widget.event.problems[_currentProblemIndex];
+  Problem get _currentProblem {
+    if (widget.event.problems.isEmpty) {
+      throw StateError('イベントに問題が設定されていません');
+    }
+    if (_currentProblemIndex < 0 || _currentProblemIndex >= widget.event.problems.length) {
+      throw RangeError('問題のインデックスが範囲外です: $_currentProblemIndex');
+    }
+    return widget.event.problems[_currentProblemIndex];
+  }
 
   @override
   void initState() {
     super.initState();
+    
+    // イベントに問題が設定されているかチェック
+    if (widget.event.problems.isEmpty) {
+      print("❌ [GameView] イベントに問題が設定されていません");
+      // エラー状態を設定（buildメソッドでエラー画面を表示）
+      return;
+    }
+    
     _remainingTime = widget.event.duration * 60; // 分を秒に変換
     _startTime = DateTime.now();
     _startTimer();
+    print("✅ [GameView] 初期化完了 - 問題数: ${widget.event.problems.length}, 制限時間: ${widget.event.duration}分");
   }
 
   @override
@@ -236,14 +130,23 @@ class _GameViewState extends State<GameView> {
 
   // ヒント表示チェック
   void _checkHints() {
-    for (final hint in _currentProblem.hints) {
-      // timeOffsetは分単位なので、秒に変換して比較
-      if ((hint.timeOffset * 60) <= _problemElapsedTime &&
-          !_displayedHints.contains(hint.id)) {
-        setState(() {
-          _displayedHints.add(hint.id);
-        });
+    // イベントに問題が設定されていない場合は何もしない
+    if (widget.event.problems.isEmpty) {
+      return;
+    }
+    
+    try {
+      for (final hint in _currentProblem.hints) {
+        // timeOffsetは秒単位なので、そのまま比較
+        if (hint.timeOffset <= _problemElapsedTime &&
+            !_displayedHints.contains(hint.id)) {
+          setState(() {
+            _displayedHints.add(hint.id);
+          });
+        }
       }
+    } catch (e) {
+      print("⚠️ [GameView] ヒントチェック中にエラー: $e");
     }
   }
 
@@ -264,9 +167,6 @@ class _GameViewState extends State<GameView> {
         print('📸 [GameView] 問題 ${_currentProblemIndex + 1} の画像認証が必要です。チェックページを表示します');
         // キーボードが閉じるのを待つ
         Future.delayed(const Duration(milliseconds: 100), () {
-          setState(() {
-            _showCameraCheck = true;
-          });
           _showCameraCheckSheet(context);
         });
       } else {
@@ -293,49 +193,44 @@ class _GameViewState extends State<GameView> {
     FocusScope.of(context).unfocus();
   }
 
-  // カメラチェックシートを表示
+  // カメラチェックページを表示
   void _showCameraCheckSheet(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      builder: (BuildContext sheetContext) {
-        return CameraCheckView(
+    _dismissKeyboard();
+    _stopTimer(); // タイマーを一時停止
+    
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => CameraCheckPage(
           problem: _currentProblem,
           eventId: widget.event.id,
           problemIndex: _currentProblemIndex,
           teamId: widget.teamId,
           onApproved: () {
-            // 認証クリア: 次の問題へ遷移するフラグを設定し、シートを閉じる
+            // 認証クリア: 次の問題へ遷移するフラグを設定
             print('✅ [GameView] 問題 ${_currentProblemIndex + 1} の画像認証がクリアされました');
-            _dismissKeyboard();
             _shouldMoveToNextProblem = true;
-            Navigator.of(sheetContext).pop(); // シートを閉じる
+            Navigator.of(context).pop(); // 認証ページを閉じる
           },
           onRejected: () {
-            // 認証失敗: チェックページに留まる（CameraCheckView内で処理）
+            // 認証失敗: チェックページに留まる（CameraCheckPage内で処理）
             print('❌ [GameView] 画像認証が拒否されました');
           },
-        );
-      },
+        ),
+      ),
     ).then((_) {
-      // シートが閉じられたときに実行される
-      // _dismissKeyboard() は onApproved/onRejected 内で呼ぶのがより確実だが、念のため
+      // ページが閉じられたときに実行される
       _dismissKeyboard();
 
       if (_shouldMoveToNextProblem) {
         _shouldMoveToNextProblem = false;
-        // シートが完全に閉じられた後に次の問題へ遷移
+        // ページが完全に閉じられた後に次の問題へ遷移
         Future.delayed(const Duration(milliseconds: 100), () {
           _moveToNextProblem();
         });
       } else {
-        // 認証をキャンセルした場合や、認証失敗でシートが閉じられた場合
+        // 認証をキャンセルした場合や、認証失敗でページが閉じられた場合
         _startTimer(); // キャンセルした場合、タイマーを再開
       }
-      setState(() {
-        _showCameraCheck = false;
-      });
     });
   }
 
@@ -382,10 +277,15 @@ class _GameViewState extends State<GameView> {
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder: (context) => ClearView(
+        builder: (context) => ClearPage(
           eventName: widget.event.name,
           eventId: widget.event.id,
           escapeTime: _calculateEscapeTime(),
+          onNavigateToEventDetail: (event) => IndividualEventScreen(event: event),
+          onDismiss: () {
+            // クリアページから戻る場合は、イベント一覧ページに戻る
+            Navigator.of(context).popUntil((route) => route.isFirst);
+          },
         ),
       ),
       (Route<dynamic> route) => false, // スタックを全てクリア
@@ -397,7 +297,10 @@ class _GameViewState extends State<GameView> {
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
         fullscreenDialog: true,
-        builder: (context) => GameOverView(eventName: widget.event.name),
+        builder: (context) => GameOverPage(
+          eventName: widget.event.name,
+          eventId: widget.event.id,
+        ),
       ),
       (Route<dynamic> route) => false, // スタックを全てクリア
     );
@@ -410,19 +313,60 @@ class _GameViewState extends State<GameView> {
       return Container();
     }
 
+    // イベントに問題が設定されていない場合のエラー画面
+    if (widget.event.problems.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('エラー'),
+          automaticallyImplyLeading: true,
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.error_outline,
+                  size: 64,
+                  color: Colors.red,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'このイベントには問題が設定されていません',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '管理者に問い合わせてください',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('戻る'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false, // 戻るボタンを非表示
         title: const Text('ゲーム進行中'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              _stopTimer();
-              Navigator.of(context).pop(); // 終了して前の画面に戻る
-            },
-            child: const Text('終了', style: TextStyle(color: Colors.red)),
-          ),
-        ],
       ),
       body: Column(
         children: [
@@ -848,8 +792,8 @@ class MyApp extends StatelessWidget {
           requiresCheck: true,
           checkText: "赤いベンチを撮影してください",
           hints: [
-            Hint(id: 'hint-1-1', content: "ヒント1: 動画の最初の方に注意深く目を凝らして。", timeOffset: 1), // 1分後
-            Hint(id: 'hint-1-2', content: "ヒント2: メッセージは逆さまになっている。", timeOffset: 3), // 3分後
+            Hint(id: 'hint-1-1', content: "ヒント1: 動画の最初の方に注意深く目を凝らして。", timeOffset: 60), // 60秒後
+            Hint(id: 'hint-1-2', content: "ヒント2: メッセージは逆さまになっている。", timeOffset: 180), // 180秒後
           ],
         ),
         Problem(

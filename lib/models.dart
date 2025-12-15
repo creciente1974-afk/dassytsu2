@@ -25,6 +25,7 @@ class Event {
     this.lastUpdated,
     this.problems = const [],
     this.records = const [],
+    this.overview,
   });
 
   // レコードの中でescapeTimeが最も小さいもの（1位）を返す
@@ -47,7 +48,9 @@ class Event {
       creationPasscode: json['creationPasscode'] as String?,
       lastUpdated: json['lastUpdated'] != null ? DateTime.parse(json['lastUpdated'] as String) : null,
       problems: (json['problems'] as List<dynamic>?)?.map((e) => Problem.fromJson(e as Map<String, dynamic>)).toList() ?? [],
-      records: (json['records'] as List<dynamic>?)?.map((e) => Record.fromJson(e as Map<String, dynamic>)).toList() ?? [],      'overview': json['overview'] as String?,    );
+      records: (json['records'] as List<dynamic>?)?.map((e) => Record.fromJson(e as Map<String, dynamic>)).toList() ?? [],
+      overview: json['overview'] as String?,
+    );
   }
 
   Map<String, dynamic> toJson() {

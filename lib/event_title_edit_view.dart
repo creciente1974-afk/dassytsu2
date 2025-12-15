@@ -3,86 +3,13 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
-
-// --- 仮定されるデータモデルとサービス ---
-// 実際のプロジェクトに合わせて調整してください。
-
-class Event {
-  final String id; // UUID
-  String name;
-  final List<dynamic> problems; // 問題リスト
-  final int duration; // 制限時間
-  List<dynamic> records; // ランキング記録
-  final String? target_object_text;
-  final String? target_object_image_url;
-  final String? card_image_url;
-  final String? creation_passcode;
-  DateTime? eventDate;
-  bool isVisible;
-  String? comment;
-  String? overview;
-  final String? qrCodeData;
-  DateTime? lastUpdated;
-
-  Event({
-    required this.id,
-    required this.name,
-    required this.problems,
-    required this.duration,
-    required this.records,
-    this.target_object_text,
-    this.target_object_image_url,
-    this.card_image_url,
-    this.creation_passcode,
-    this.eventDate,
-    required this.isVisible,
-    this.comment,
-    this.overview,
-    this.qrCodeData,
-    this.lastUpdated,
-  });
-  
-  // イベントのコピーを作成し、新しい値を適用するためのファクトリコンストラクタ
-  Event.update({
-    required Event oldEvent,
-    String? name,
-    DateTime? eventDate,
-    bool? isVisible,
-    String? comment,
-    String? overview,
-    List<dynamic>? records,
-  }) : this(
-    id: oldEvent.id,
-    name: name ?? oldEvent.name,
-    problems: oldEvent.problems,
-    duration: oldEvent.duration,
-    records: records ?? oldEvent.records,
-    target_object_text: oldEvent.target_object_text,
-    target_object_image_url: oldEvent.target_object_image_url,
-    card_image_url: oldEvent.card_image_url,
-    creation_passcode: oldEvent.creation_passcode,
-    eventDate: eventDate ?? oldEvent.eventDate,
-    isVisible: isVisible ?? oldEvent.isVisible,
-    comment: comment,
-    overview: overview,
-    qrCodeData: oldEvent.qrCodeData,
-    lastUpdated: DateTime.now(), // 更新時は常に日時を更新
-  );
-}
-
-// FirebaseService の仮定
-class FirebaseService {
-  static final FirebaseService shared = FirebaseService._internal();
-  FirebaseService._internal();
-  
-  bool get isConfigured => true; // Firebase設定済みと仮定
-
-  Future<void> saveEventToFirebase(Event event, {required String passcode}) async {
-    // 実際はFirestoreに保存するロジックを実装
-    await Future.delayed(const Duration(milliseconds: 500));
-    print("FirestoreにイベントID: ${event.id} を保存しました。");
-  }
-}
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'lib/models/event.dart'; // 正規のEventモデル
+import 'lib/models/escape_record.dart'; // EscapeRecordモデル
+import 'firebase_service.dart'; // FirebaseService
+import 'event_list_page.dart'; // EventListPage
 
 // ----------------------------------------------------
 
@@ -106,8 +33,10 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
   late TextEditingController _eventNameController;
   late TextEditingController _commentController;
   late TextEditingController _overviewController;
+  late TextEditingController _passcodeController;
   late DateTime _eventDate;
   late bool _isVisible;
+  late bool _isNewEvent; // 新規作成かどうか
   
   bool _isSaving = false;
   bool _isResetting = false;
@@ -116,15 +45,23 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
   bool _showError = false;
   String _errorMessage = "";
   
-  final FirebaseService _firebaseService = FirebaseService.shared;
+  // 画像選択関連
+  File? _selectedImageFile;
+  bool _isUploadingImage = false;
+  bool _imageRemoved = false; // 既存の画像を削除したかどうか
+  final ImagePicker _imagePicker = ImagePicker();
+  
+  final FirebaseService _firebaseService = FirebaseService();
 
   @override
   void initState() {
     super.initState();
     // SwiftUIの init() 内での初期値設定に相当
+    _isNewEvent = widget.event.id.isEmpty || widget.event.name.isEmpty;
     _eventNameController = TextEditingController(text: widget.event.name);
     _commentController = TextEditingController(text: widget.event.comment);
     _overviewController = TextEditingController(text: widget.event.overview);
+    _passcodeController = TextEditingController(text: widget.event.creationPasscode ?? '');
     _eventDate = widget.event.eventDate ?? DateTime.now();
     _isVisible = widget.event.isVisible;
   }
@@ -134,12 +71,50 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
     _eventNameController.dispose();
     _commentController.dispose();
     _overviewController.dispose();
+    _passcodeController.dispose();
     super.dispose();
   }
 
   // 保存ボタンの有効/無効を判定するGetter
   bool get _isSaveDisabled {
-    return _eventNameController.text.trim().isEmpty || _isSaving || _isResetting;
+    return _eventNameController.text.trim().isEmpty || 
+           _isSaving || 
+           _isResetting || 
+           _isUploadingImage;
+  }
+
+  // 画像選択メソッド
+  Future<void> _pickImage() async {
+    try {
+      final XFile? pickedFile = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+      
+      if (pickedFile != null) {
+        setState(() {
+          _selectedImageFile = File(pickedFile.path);
+        });
+      }
+    } catch (e) {
+      print("⚠️ [EventTitleEditView] 画像選択エラー: $e");
+      if (mounted) {
+        setState(() {
+          _errorMessage = "画像の選択に失敗しました: $e";
+          _showError = true;
+        });
+      }
+    }
+  }
+
+  // 画像削除メソッド
+  void _removeImage() {
+    setState(() {
+      _selectedImageFile = null;
+      _imageRemoved = true; // 既存の画像も削除するフラグを立てる
+    });
   }
 
   // SwiftUIの private func saveEvent() async に相当
@@ -155,24 +130,76 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
     
     setState(() { _isSaving = true; });
 
-    // 暗証番号を取得 (UserDefaults.standard.string(forKey: "currentPasscode") に相当)
-    final prefs = await SharedPreferences.getInstance();
-    final passcode = widget.event.creation_passcode ?? prefs.getString("currentPasscode") ?? "";
+    // 画像をアップロード（選択されている場合）または削除
+    String? imageUrl;
+    if (_imageRemoved && _selectedImageFile == null) {
+      // 画像が削除された場合
+      imageUrl = null;
+    } else if (_selectedImageFile != null) {
+      // 新しい画像が選択された場合
+      setState(() { _isUploadingImage = true; });
+      try {
+        if (_firebaseService.isConfigured) {
+          imageUrl = await _firebaseService.uploadEventCardImage(
+            _selectedImageFile!,
+            eventId: widget.event.id,
+          );
+          print("✅ [EventTitleEditView] 画像アップロード成功: $imageUrl");
+        } else {
+          print("⚠️ [EventTitleEditView] Firebaseが設定されていないため、画像をアップロードできません。");
+          imageUrl = widget.event.cardImageUrl; // 既存のURLを保持
+        }
+      } catch (error) {
+        print("⚠️ [EventTitleEditView] 画像アップロードエラー: $error");
+        if (mounted) {
+          setState(() {
+            _errorMessage = "画像のアップロードに失敗しました: $error";
+            _showError = true;
+            _isSaving = false;
+            _isUploadingImage = false;
+          });
+        }
+        return;
+      } finally {
+        if (mounted) {
+          setState(() { _isUploadingImage = false; });
+        }
+      }
+    } else {
+      // 画像に変更がない場合、既存のURLを保持
+      imageUrl = widget.event.cardImageUrl;
+    }
+
+    // 暗証番号を取得（新規作成時のみ入力された値を使用）
+    final passcode = _isNewEvent 
+        ? _passcodeController.text.trim()
+        : (widget.event.creationPasscode ?? '');
+    
+    if (_isNewEvent && passcode.isEmpty) {
+      setState(() {
+        _errorMessage = "暗証番号を入力してください";
+        _showError = true;
+        _isSaving = false;
+      });
+      return;
+    }
 
     // イベントオブジェクトを更新
-    final updatedEvent = Event.update(
-      oldEvent: widget.event,
+    final updatedEvent = widget.event.copyWith(
       name: name,
       eventDate: _eventDate,
       isVisible: _isVisible,
       comment: _commentController.text.trim().isEmpty ? null : _commentController.text.trim(),
       overview: _overviewController.text.trim().isEmpty ? null : _overviewController.text.trim(),
+      cardImageUrl: imageUrl,
+      creationPasscode: passcode.isNotEmpty ? passcode : widget.event.creationPasscode,
+      lastUpdated: DateTime.now(),
     );
     
     // Firebaseに保存
-    if (_firebaseService.isConfigured && passcode.isNotEmpty) {
+    if (_firebaseService.isConfigured) {
       try {
-        await _firebaseService.saveEventToFirebase(updatedEvent, passcode: passcode);
+        await _firebaseService.saveEvent(updatedEvent);
         print("✅ [EventTitleEditView] Firebaseにイベントの編集を保存しました");
       } catch (error) {
         print("⚠️ [EventTitleEditView] Firebaseへの保存でエラー: $error");
@@ -180,11 +207,13 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
           setState(() {
             _errorMessage = "Firebaseへの保存に失敗しました: $error";
             _showError = true;
+            _isSaving = false;
           });
         }
+        return;
       }
     } else {
-      print("⚠️ [EventTitleEditView] Firebaseが設定されていないか、暗証番号がありません。ローカルのみに保存します。");
+      print("⚠️ [EventTitleEditView] Firebaseが設定されていません。");
     }
 
     if (mounted) {
@@ -194,8 +223,11 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
       widget.onUpdate?.call(updatedEvent);
       print("✅ [EventTitleEditView] イベントタイトルの編集が完了しました: name=$name");
 
-      // 画面を閉じる (dismiss() に相当)
-      Navigator.of(context).pop();
+      // イベント一覧ページに直接遷移（ログイン後の遷移先と同一ページに統一）
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const EventListPage()),
+        (route) => false, // すべての前のルートを削除
+      );
     }
   }
   
@@ -204,18 +236,19 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
     setState(() { _isResetting = true; });
 
     final prefs = await SharedPreferences.getInstance();
-    final passcode = widget.event.creation_passcode ?? prefs.getString("currentPasscode") ?? "";
+    final passcode = widget.event.creationPasscode ?? prefs.getString("currentPasscode") ?? "";
     
     // ランキング（records）を空にしてイベントを更新
-    final updatedEvent = Event.update(
-      oldEvent: widget.event,
+    final updatedEvent = widget.event.copyWith(
       records: [], // ランキングをリセット（空配列）
+      lastUpdated: DateTime.now(),
     );
 
     // Firebaseに保存
+    // TODO: saveEventToFirebase メソッドを実装する必要があります
     if (_firebaseService.isConfigured && passcode.isNotEmpty) {
       try {
-        await _firebaseService.saveEventToFirebase(updatedEvent, passcode: passcode);
+        // await _firebaseService.saveEventToFirebase(updatedEvent, passcode: passcode);
         print("✅ [EventTitleEditView] ランキングリセットをFirebaseに保存しました");
       } catch (error) {
         print("⚠️ [EventTitleEditView] Firebaseへの保存でエラー: $error");
@@ -300,6 +333,20 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
               isRequired: true,
             ),
             const Divider(),
+            // 新規作成時のみ暗証番号フィールドを表示
+            if (_isNewEvent) ...[
+              TextField(
+                controller: _passcodeController,
+                decoration: const InputDecoration(
+                  labelText: "暗証番号 *",
+                  border: InputBorder.none,
+                  hintText: "イベント編集時に使用する暗証番号を入力",
+                ),
+                obscureText: true,
+                keyboardType: TextInputType.number,
+              ),
+              const Divider(),
+            ],
             // TextField("コメント", text: $comment) に相当
             _buildTextField(
               controller: _commentController,
@@ -313,6 +360,9 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
               trailing: Text(_eventDate.toLocal().toString().split(' ')[0]),
               onTap: () => _selectDate(context),
             ),
+            const Divider(),
+            // 画像選択セクション
+            _buildImageSection(),
           ],
         ),
         const SizedBox(height: 20),
@@ -484,6 +534,91 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
           ],
         );
       },
+    );
+  }
+
+  // 画像選択セクションを構築
+  Widget _buildImageSection() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "イベント画像",
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 12),
+          // 画像プレビュー
+          if (_selectedImageFile != null || 
+              (widget.event.cardImageUrl != null && !_imageRemoved))
+            Stack(
+              children: [
+                Container(
+                  width: double.infinity,
+                  height: 200,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: _selectedImageFile != null
+                        ? Image.file(
+                            _selectedImageFile!,
+                            fit: BoxFit.cover,
+                          )
+                        : widget.event.cardImageUrl != null && !_imageRemoved
+                            ? CachedNetworkImage(
+                                imageUrl: widget.event.cardImageUrl!,
+                                fit: BoxFit.cover,
+                                placeholder: (context, url) => const Center(
+                                  child: CircularProgressIndicator(),
+                                ),
+                                errorWidget: (context, url, error) => const Icon(
+                                  Icons.error,
+                                  size: 50,
+                                  color: Colors.grey,
+                                ),
+                              )
+                            : null,
+                  ),
+                ),
+                // 削除ボタン
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.black54,
+                    ),
+                    onPressed: _removeImage,
+                  ),
+                ),
+              ],
+            ),
+          const SizedBox(height: 12),
+          // 画像選択ボタン
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _isUploadingImage || _isSaving ? null : _pickImage,
+              icon: _isUploadingImage
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.image),
+              label: Text(_selectedImageFile != null || 
+                  (widget.event.cardImageUrl != null && !_imageRemoved)
+                  ? "画像を変更"
+                  : "画像を選択"),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

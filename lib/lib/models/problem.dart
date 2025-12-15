@@ -70,4 +70,27 @@ class Problem {
       'requiresCheck': requiresCheck,
     };
   }
+
+  // copyWithメソッドを追加
+  Problem copyWith({
+    String? id,
+    String? text,
+    String? mediaURL,
+    String? answer,
+    List<Hint>? hints,
+    String? checkText,
+    String? checkImageURL,
+    bool? requiresCheck,
+  }) {
+    return Problem(
+      id: id ?? this.id,
+      text: text ?? this.text,
+      mediaURL: mediaURL ?? this.mediaURL,
+      answer: answer ?? this.answer,
+      hints: hints ?? this.hints,
+      checkText: checkText ?? this.checkText,
+      checkImageURL: checkImageURL ?? this.checkImageURL,
+      requiresCheck: requiresCheck ?? this.requiresCheck,
+    );
+  }
 }

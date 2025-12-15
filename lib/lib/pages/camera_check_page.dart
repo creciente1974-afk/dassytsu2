@@ -5,18 +5,10 @@ import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 // サービスとモデルのインポート
-// models.dart には Problem, TeamProgress, CheckStatus が含まれているはずです。
 import '../models/problem.dart';
+import '../lib/models/team_progress.dart'; // CheckStatusとTeamProgressをインポート
 import '../../../firebase_service.dart';
 import '../../../lib/services/firebase_service_error.dart';
-
-// CheckStatus enum
-enum CheckStatus {
-  notStarted,
-  checking,
-  success,
-  failure,
-}
 
 // 仮の画像比較ロジック（Method Channelの代替スタブ）
 // 実際にはネイティブコードのVisionで実装されます。
@@ -144,22 +136,41 @@ class _CameraCheckPageState extends State<CameraCheckPage> {
     // 処理中の場合は何もしない
     if (_isUploading || _isCheckingAutomatically) return;
     
-    final XFile? image = await _picker.pickImage(source: ImageSource.camera);
-    
-    if (image != null) {
-      final File selectedFile = File(image.path);
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85, // 画像品質を設定
+      );
       
+      if (image != null) {
+        final File selectedFile = File(image.path);
+        
+        // ファイルが存在するか確認
+        if (await selectedFile.exists()) {
+          if(mounted) {
+            setState(() {
+              _selectedImage = selectedFile;
+              _uploadError = null;
+              _checkStatus = CheckStatus.notStarted; // 新しい写真を撮ったらステータスリセット
+              _hasAttemptedAutoCheck = false;
+            });
+            
+            // 撮影後は自動認証を行わず、ユーザーが「認証」ボタンを押下するまで待つ
+          }
+        } else {
+          if(mounted) {
+            setState(() {
+              _uploadError = '撮影した画像ファイルが見つかりませんでした。';
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ [CameraCheckPage] カメラエラー: $e');
       if(mounted) {
         setState(() {
-          _selectedImage = selectedFile;
-          _uploadError = null;
-          _checkStatus = CheckStatus.notStarted; // 新しい写真を撮ったらステータスリセット
-          _hasAttemptedAutoCheck = false;
+          _uploadError = 'カメラの起動に失敗しました: ${e.toString()}';
         });
-        
-        // Swiftコードの onChange(of: selectedImage) に相当するロジック
-        // 画像が選ばれたら、すぐに自動認証を試みる
-        _checkImageAutomatically();
       }
     }
   }
@@ -313,30 +324,65 @@ class _CameraCheckPageState extends State<CameraCheckPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("撮影対象のミッション", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const Text("認証チェック", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const Divider(height: 20),
             
-            if (widget.problem.checkText != null && widget.problem.checkText!.isNotEmpty)
-              Text("指示: ${widget.problem.checkText!}", style: const TextStyle(fontSize: 16)),
-            
-            const SizedBox(height: 16),
-            
+            // 認証チェック画像を表示
             if (widget.problem.checkImageURL != null && widget.problem.checkImageURL!.isNotEmpty)
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text("見本画像:", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-                  const SizedBox(height: 8),
+                  const Text(
+                    "認証チェック画像:",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue),
+                  ),
+                  const SizedBox(height: 12),
                   // キャッシュ付きネットワーク画像ローダーを使用
-                  CachedNetworkImage(
-                    imageUrl: widget.problem.checkImageURL!,
-                    placeholder: (context, url) => const Center(child: CircularProgressIndicator()),
-                    errorWidget: (context, url, error) => const Icon(Icons.broken_image, size: 50, color: Colors.red),
-                    fit: BoxFit.contain,
-                    height: 200,
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.blue, width: 2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: CachedNetworkImage(
+                        imageUrl: widget.problem.checkImageURL!,
+                        placeholder: (context, url) => const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(20.0),
+                            child: CircularProgressIndicator(),
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => const Padding(
+                          padding: EdgeInsets.all(20.0),
+                          child: Icon(Icons.broken_image, size: 50, color: Colors.red),
+                        ),
+                        fit: BoxFit.contain,
+                        height: 250,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    "この画像と同じものを撮影してください",
+                    style: TextStyle(fontSize: 14, color: Colors.grey, fontStyle: FontStyle.italic),
                   ),
                 ],
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.0),
+                child: Text(
+                  "認証チェック画像が設定されていません",
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
+                ),
               ),
+            
+            if (widget.problem.checkText != null && widget.problem.checkText!.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Divider(height: 20),
+              Text("指示: ${widget.problem.checkText!}", style: const TextStyle(fontSize: 16)),
+            ],
           ],
         ),
       ),
@@ -345,24 +391,43 @@ class _CameraCheckPageState extends State<CameraCheckPage> {
   
   // 画像プレビューセクション
   Widget _buildImagePreviewSection() {
-    return Container(
-      height: 300,
-      decoration: BoxDecoration(
-        color: Colors.grey[200],
-        borderRadius: BorderRadius.circular(12),
-        border: _selectedImage == null ? Border.all(color: Colors.grey, style: BorderStyle.dashed) : null,
-      ),
-      child: _selectedImage == null
-          ? const Center(
-              child: Text(
-                "撮影した写真がここに表示されます",
-                style: TextStyle(color: Colors.grey, fontSize: 16),
-              ),
-            )
-          : ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(_selectedImage!, fit: BoxFit.cover),
-            ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "撮影した画像",
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          height: 300,
+          decoration: BoxDecoration(
+            color: Colors.grey[200],
+            borderRadius: BorderRadius.circular(12),
+            border: _selectedImage == null 
+                ? Border.all(color: Colors.grey, width: 2) 
+                : Border.all(color: Colors.green, width: 2),
+          ),
+          child: _selectedImage == null
+              ? const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.camera_alt, size: 48, color: Colors.grey),
+                      SizedBox(height: 12),
+                      Text(
+                        "撮影した写真がここに表示されます",
+                        style: TextStyle(color: Colors.grey, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                )
+              : ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.file(_selectedImage!, fit: BoxFit.cover),
+                ),
+        ),
+      ],
     );
   }
 
@@ -417,12 +482,12 @@ class _CameraCheckPageState extends State<CameraCheckPage> {
   Widget _buildActionButtons() {
     final bool isBusy = _isUploading || _isCheckingAutomatically;
     
-    // 1. 写真が未撮影の場合
+    // 1. 写真が未撮影の場合 - 「撮影して認証」ボタンを表示
     if (_selectedImage == null) {
       return ElevatedButton.icon(
         onPressed: isBusy ? null : _takePhoto,
         icon: const Icon(Icons.camera_alt, color: Colors.white),
-        label: const Text("カメラを起動して撮影", style: TextStyle(color: Colors.white, fontSize: 18)),
+        label: const Text("撮影して認証", style: TextStyle(color: Colors.white, fontSize: 18)),
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.blue,
           padding: const EdgeInsets.all(18),
@@ -435,16 +500,16 @@ class _CameraCheckPageState extends State<CameraCheckPage> {
     if (_checkStatus != CheckStatus.approved) {
       return Column(
         children: [
-          // 自動認証 / 管理者チェック待ちボタン
+          // 認証ボタン（撮影後に表示）
           ElevatedButton.icon(
             onPressed: isBusy ? null : _checkImageAutomatically,
             icon: isBusy 
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : const Icon(Icons.send, color: Colors.white),
+                : const Icon(Icons.verified, color: Colors.white),
             label: Text(
               _isCheckingAutomatically
-                  ? "自動認証中..."
-                  : (_isUploading ? "アップロード中..." : "認証を試みる / 送信"),
+                  ? "認証中..."
+                  : (_isUploading ? "アップロード中..." : "認証する"),
               style: const TextStyle(color: Colors.white, fontSize: 18),
             ),
             style: ElevatedButton.styleFrom(

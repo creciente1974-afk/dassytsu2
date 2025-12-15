@@ -5,7 +5,7 @@ import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 
 // サービスとモデルのインポート
-import '../services/firebase_service.dart';
+import '../../firebase_service.dart';
 import '../services/firebase_service_error.dart';
 
 class MediaUploadPage extends StatefulWidget {
@@ -139,14 +139,11 @@ class _MediaUploadPageState extends State<MediaUploadPage> {
           widget.problemId,
         );
       } else {
-        // 画像のアップロード (FirebaseService.uploadMediaImage は別途実装が必要です)
-        // ⚠️ ここでは、以前定義した uploadImage を問題提出の文脈で利用します。
-        // （本来はイベントメディア用に uploadMediaImage が必要）
-        uploadedUrl = await _firebaseService.uploadImage(
+        // 画像のアップロード
+        uploadedUrl = await _firebaseService.uploadMediaImage(
           file, 
-          'admin_team_id', // 管理画面用なのでダミーチームID
           widget.eventId, 
-          0, // 問題番号はここでは無視
+          widget.problemId,
         );
       }
 
@@ -288,7 +285,7 @@ class _MediaUploadPageState extends State<MediaUploadPage> {
           const SizedBox(height: 12),
           const Text(
             "写真または動画を選択",
-            style: TextStyle(fontWeight: FontWeight.headline6),
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
           ),
           const SizedBox(height: 4),
           Text(

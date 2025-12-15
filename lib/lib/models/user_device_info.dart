@@ -1,47 +1,49 @@
 // lib/models/user_device_info.dart
 
 class UserDeviceInfo {
-  // 端末を一意に識別するためのID (iOSの identifierForVendor や Androidの ID)
   final String deviceId;
-  // 端末の名称 (例: iPhone 15, Galaxy S23)
-  final String deviceName;
-  // OSのバージョン (例: iOS 17.1, Android 14)
-  final String osVersion;
-  // ユーザーがログインしたタイムスタンプ (保存時に自動生成)
-  final DateTime timestamp;
+  final String deviceModel; // Swiftの deviceModel に対応 (旧: deviceName)
+  final String systemVersion; // Swiftの systemVersion に対応 (旧: osVersion)
+  final String deviceName; // Swiftの deviceName に対応
+  final DateTime registeredAt; // Swiftの registeredAt に対応
 
   UserDeviceInfo({
     required this.deviceId,
+    required this.deviceModel,
+    required this.systemVersion,
     required this.deviceName,
-    required this.osVersion,
-    // タイムスタンプは生成時に指定がない場合、現在時刻をデフォルト値とする
-    DateTime? timestamp,
-  }) : timestamp = timestamp ?? DateTime.now();
+    DateTime? registeredAt,
+  }) : registeredAt = registeredAt ?? DateTime.now();
 
+  // MARK: - Firebaseとの相互変換
 
-  // MARK: - Firebaseへの変換（toJson）
-  
-  // Flutterの login() 関数で jsonEncode() を使って SharedPreferences に保存するためにも使用
   Map<String, dynamic> toJson() {
     return {
       'deviceId': deviceId,
+      'deviceModel': deviceModel,
+      'systemVersion': systemVersion,
       'deviceName': deviceName,
-      'osVersion': osVersion,
-      // Firebaseで比較可能な文字列形式で保存
-      'timestamp': timestamp.toIso8601String(), 
+      // Swift互換のため、秒単位のタイムスタンプで保存
+      'registeredAt': registeredAt.millisecondsSinceEpoch / 1000.0, 
     };
   }
 
-  // MARK: - Firebaseからの変換（fromJson）
-  // (今回は未使用ですが、管理画面などで必要になるため定義)
-
   factory UserDeviceInfo.fromJson(Map<String, dynamic> json) {
+    // registeredAt のデコード (秒単位のタイムスタンプ)
+    DateTime registeredAtDate = DateTime.now();
+    final registeredAtValue = json['registeredAt'];
+    if (registeredAtValue is num) {
+      registeredAtDate = DateTime.fromMillisecondsSinceEpoch((registeredAtValue * 1000).toInt());
+    } else if (registeredAtValue is String) {
+      registeredAtDate = DateTime.tryParse(registeredAtValue) ?? DateTime.now();
+    }
+    
     return UserDeviceInfo(
       deviceId: json['deviceId'] as String? ?? '',
+      deviceModel: json['deviceModel'] as String? ?? '',
+      systemVersion: json['systemVersion'] as String? ?? '',
       deviceName: json['deviceName'] as String? ?? '',
-      osVersion: json['osVersion'] as String? ?? '',
-      // 文字列からDateTimeオブジェクトに変換
-      timestamp: DateTime.parse(json['timestamp'] as String),
+      registeredAt: registeredAtDate,
     );
   }
 }

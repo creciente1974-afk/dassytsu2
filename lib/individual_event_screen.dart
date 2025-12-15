@@ -3,11 +3,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
-import 'event_model.dart'; // 定義したモデル
-import 'firebase_service.dart'; // 以前変換したFirebaseService
+import 'lib/models/event.dart' as models; // 正規のEventモデル
+import 'lib/models/escape_record.dart' as models; // EscapeRecordモデル
+import 'firebase_service.dart' as firebase; // FirebaseService
 import 'lib/pages/clear_page.dart';
-import 'game_view.dart';
+import 'game_view.dart'; // GameView
 import 'lib/pages/reception_page.dart';
+import 'lib/pages/player_name_registration_page.dart';
+import 'event_list_page.dart'; // EventListPage
 
 // ⚠️ 注意: GameView, ClearView, ReceptionView はここでは定義していません。
 // 適切なファイルからインポートしてください。
@@ -16,7 +19,7 @@ import 'lib/pages/reception_page.dart';
 const Uuid _uuid = Uuid();
 
 class IndividualEventScreen extends StatefulWidget {
-  final Event event;
+  final models.Event event;
 
   const IndividualEventScreen({super.key, required this.event});
 
@@ -26,12 +29,14 @@ class IndividualEventScreen extends StatefulWidget {
 
 class _IndividualEventScreenState extends State<IndividualEventScreen> {
   // @State private var currentEvent: Event
-  late Event _currentEvent;
+  late models.Event _currentEvent;
   // @State private var isLoading = false
   bool _isLoading = false;
+  // FutureBuilderのfutureを再生成するためのキー
+  int _refreshKey = 0;
 
   // private let firebaseService = FirebaseService.shared に相当
-  final FirebaseService _firebaseService = FirebaseService();
+  final firebase.FirebaseService _firebaseService = firebase.FirebaseService();
 
   @override
   void initState() {
@@ -44,14 +49,14 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
   // MARK: - Computed Properties (算出プロパティ)
 
   // チェック済みフラグを確認 (isClearChecked)
-  Future<bool> get _isClearChecked async {
+  Future<bool> _isClearChecked() async {
     final prefs = await SharedPreferences.getInstance();
     final key = "clearChecked_${_currentEvent.id}"; // DartではIDはString
     return prefs.getBool(key) ?? false;
   }
 
   // 保存されたescapeTimeを取得 (savedEscapeTime)
-  Future<double?> get _savedEscapeTime async {
+  Future<double?> _savedEscapeTime() async {
     final prefs = await SharedPreferences.getInstance();
     final key = "escapeTime_${_currentEvent.id}";
     final value = prefs.getDouble(key) ?? 0.0;
@@ -59,8 +64,11 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
   }
 
   // sortedRecords に相当
-  List<EscapeRecord> get _sortedRecords {
-    final records = List<EscapeRecord>.from(_currentEvent.records);
+  List<models.EscapeRecord> get _sortedRecords {
+    final records = _currentEvent.records
+        .where((r) => r != null)
+        .cast<models.EscapeRecord>()
+        .toList();
     // EscapeRecordで定義したescapeTimeでソート
     records.sort((a, b) => a.escapeTime.compareTo(b.escapeTime));
     return records;
@@ -105,6 +113,7 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
     return newTeamId;
   }
 
+
   // MARK: - Data Loading & Reset (データ読み込みとリセット)
   
   // private func loadEvent() に相当
@@ -125,6 +134,9 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
 
       setState(() {
         _currentEvent = updatedEvent;
+        // _refreshKeyを更新することで、FutureBuilderが再実行され、
+        // SharedPreferencesの最新の値が読み込まれる
+        _refreshKey++;
       });
     } catch (e) {
       debugPrint("イベントデータのロード中にエラー: $e");
@@ -162,8 +174,9 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
   @override
   Widget build(BuildContext context) {
     // SwiftUIのViewと同様にFutureBuilderを使ってisClearCheckedとsavedEscapeTimeを待つ
+    // _refreshKeyを変更することで、FutureBuilderのfutureが再生成され、最新の値を読み込む
     return FutureBuilder(
-      future: Future.wait([_isClearChecked, _savedEscapeTime]),
+      future: Future.wait([_isClearChecked(), _savedEscapeTime()]),
       builder: (context, snapshot) {
         final isClearChecked = snapshot.data?[0] as bool? ?? false;
         final savedEscapeTime = snapshot.data?[1] as double?;
@@ -194,10 +207,10 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
                   const SizedBox(height: 20),
 
                   // 2. イベントカード画像表示
-                  if (_currentEvent.card_image_url != null && _currentEvent.card_image_url!.isNotEmpty)
+                  if (_currentEvent.cardImageUrl != null && _currentEvent.cardImageUrl!.isNotEmpty)
                     _buildCardImage(),
                   
-                  if (_currentEvent.card_image_url != null && _currentEvent.card_image_url!.isNotEmpty)
+                  if (_currentEvent.cardImageUrl != null && _currentEvent.cardImageUrl!.isNotEmpty)
                     const SizedBox(height: 20),
 
                   // 3. イベント概要表示
@@ -216,6 +229,11 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
 
                   // 5. 開始/再挑戦ボタン
                   _buildStartButton(context, isClearChecked),
+                  
+                  const SizedBox(height: 20),
+
+                  // 5.5. イベント一覧に戻るボタン
+                  _buildBackToListButton(context),
                   
                   const SizedBox(height: 30),
 
@@ -296,7 +314,7 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
   Widget _buildCardImage() {
     // SwiftUIのAsyncImageに相当
     return CachedNetworkImage(
-      imageUrl: _currentEvent.card_image_url!,
+      imageUrl: _currentEvent.cardImageUrl!,
       imageBuilder: (context, imageProvider) => Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
@@ -362,10 +380,12 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
       // NavigationLinkに相当
       onPressed: () {
         Navigator.of(context).push(MaterialPageRoute(
-          builder: (context) => ClearView( // ⚠️ ClearViewは定義が必要
+          builder: (context) => ClearPage(
             eventName: _currentEvent.name,
             eventId: _currentEvent.id,
             escapeTime: escapeTime,
+            onNavigateToEventDetail: (event) => IndividualEventScreen(event: event),
+            onDismiss: () => Navigator.of(context).pop(),
           ),
         ));
       },
@@ -403,11 +423,10 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
         // クリア後の場合はアラートを表示
         await _showRestartAlert(context);
       } else {
-        // 未クリアの場合はゲーム開始
-        final teamId = await _generateTeamId();
+        // 未クリアの場合はプレイヤー名登録ページに遷移
         if (mounted) {
           Navigator.of(context).push(MaterialPageRoute(
-            builder: (context) => GameView(event: _currentEvent, teamId: teamId), // ⚠️ GameViewは定義が必要
+            builder: (context) => PlayerNameRegistrationPage(event: _currentEvent),
           ));
         }
       }
@@ -428,6 +447,44 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
           Text(
             buttonText,
             style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // イベント一覧に戻るボタン
+  Widget _buildBackToListButton(BuildContext context) {
+    return TextButton(
+      onPressed: () {
+        // イベント一覧ページに直接遷移
+        // ナビゲーションスタックをクリアしてEventListPageに遷移
+        if (mounted) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (context) => const EventListPage(),
+            ),
+            (route) => false, // すべての前のルートを削除
+          );
+        }
+      },
+      style: TextButton.styleFrom(
+        backgroundColor: Colors.grey[600],
+        padding: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.arrow_back, color: Colors.white),
+          SizedBox(width: 8),
+          Text(
+            "イベント一覧に戻る",
+            style: TextStyle(
               color: Colors.white,
               fontWeight: FontWeight.w600,
               fontSize: 16,
@@ -464,7 +521,7 @@ class _IndividualEventScreenState extends State<IndividualEventScreen> {
                 // 簡略化のため、ここでは直接ReceptionViewにpushReplacementします。
                 if (mounted) {
                     Navigator.of(context).pushReplacement(MaterialPageRoute(
-                        builder: (context) => ReceptionView(event: _currentEvent), // ⚠️ ReceptionViewは定義が必要
+                        builder: (context) => ReceptionPage(event: _currentEvent),
                     ));
                 }
               },

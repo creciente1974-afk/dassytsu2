@@ -1,5 +1,6 @@
 // lib/models/event.dart
 import 'package:uuid/uuid.dart';
+import 'package:flutter/foundation.dart';
 import 'problem.dart';
 import 'escape_record.dart';
 
@@ -71,17 +72,58 @@ class Event {
       }
     }
     
-    // 2. recordsリストのパース（省略可。今回はFirebaseから取得しない想定）
+    // 2. recordsリストのパース
     List<EscapeRecord> parsedRecords = [];
     final recordsData = json['records'];
     if (recordsData is List) {
-        // ... EscapeRecordのパースロジック
+      parsedRecords = recordsData
+          .map((item) {
+            try {
+              if (item is Map) {
+                return EscapeRecord.fromJson(Map<String, dynamic>.from(item));
+              }
+              return null;
+            } catch (e) {
+              debugPrint("⚠️ [Event.fromJson] EscapeRecordパースエラー: $e");
+              return null;
+            }
+          })
+          .whereType<EscapeRecord>()
+          .toList();
+    } else if (recordsData is Map) {
+      // Firebase Realtime Databaseで配列がMapとして扱われる場合に対応
+      final recordsMap = Map<String, dynamic>.from(recordsData);
+      recordsMap.forEach((key, value) {
+        try {
+          if (value is Map) {
+            final recordMap = Map<String, dynamic>.from(value);
+            recordMap['id'] = key; // キーをIDとして使用
+            parsedRecords.add(EscapeRecord.fromJson(recordMap));
+          }
+        } catch (e) {
+          debugPrint("⚠️ [Event.fromJson] EscapeRecordパースエラー (key: $key): $e");
+        }
+      });
     }
 
-    // 3. Date型の変換 (Swiftの Date() は通常、秒単位のタイムスタンプまたはISO文字列)
+    // 3. Date型の変換 (FirebaseからはISO8601文字列またはミリ秒/秒の数値で来る可能性がある)
     DateTime? parseDate(dynamic value) {
-      if (value is String) return DateTime.tryParse(value);
-      if (value is num) return DateTime.fromMillisecondsSinceEpoch((value * 1000).toInt()); // 秒をミリ秒に
+      if (value == null) return null;
+      if (value is String) {
+        // ISO8601文字列としてパース
+        return DateTime.tryParse(value);
+      }
+      if (value is num) {
+        final numValue = value.toInt();
+        // ミリ秒か秒かを判定（一般的に1000000000000より小さい場合は秒単位とみなす）
+        if (numValue > 1000000000000) {
+          // ミリ秒単位
+          return DateTime.fromMillisecondsSinceEpoch(numValue);
+        } else {
+          // 秒単位
+          return DateTime.fromMillisecondsSinceEpoch(numValue * 1000);
+        }
+      }
       return null;
     }
 
@@ -125,5 +167,42 @@ class Event {
       'overview': overview,
       'qrCodeData': qrCodeData,
     };
+  }
+
+  // copyWithメソッドを追加
+  Event copyWith({
+    String? id,
+    String? name,
+    List<Problem>? problems,
+    int? duration,
+    List<EscapeRecord>? records,
+    String? targetObjectText,
+    String? targetObjectImageUrl,
+    String? cardImageUrl,
+    String? creationPasscode,
+    DateTime? eventDate,
+    bool? isVisible,
+    DateTime? lastUpdated,
+    String? comment,
+    String? overview,
+    String? qrCodeData,
+  }) {
+    return Event(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      problems: problems ?? this.problems,
+      duration: duration ?? this.duration,
+      records: records ?? this.records,
+      targetObjectText: targetObjectText ?? this.targetObjectText,
+      targetObjectImageUrl: targetObjectImageUrl ?? this.targetObjectImageUrl,
+      cardImageUrl: cardImageUrl ?? this.cardImageUrl,
+      creationPasscode: creationPasscode ?? this.creationPasscode,
+      eventDate: eventDate ?? this.eventDate,
+      isVisible: isVisible ?? this.isVisible,
+      lastUpdated: lastUpdated ?? this.lastUpdated,
+      comment: comment ?? this.comment,
+      overview: overview ?? this.overview,
+      qrCodeData: qrCodeData ?? this.qrCodeData,
+    );
   }
 }

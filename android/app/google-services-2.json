@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "245139907628",
+    "project_id": "dassyutsu2",
+    "storage_bucket": "dassyutsu2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:245139907628:android:b6cceefb12cf1743eddd89",
+        "android_client_info": {
+          "package_name": "com.dassyutsu2.dassyutsu_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoq3k9gWDq5Qnu4FKQd15YB7GBGJT-Ckg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

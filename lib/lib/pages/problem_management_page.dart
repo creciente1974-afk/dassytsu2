@@ -7,8 +7,13 @@ import 'dart:io';
 // 必要なモデルとサービスのインポート
 import '../models/problem.dart';
 import '../models/event.dart'; // Eventモデルの構造が必要
-import '../services/firebase_service.dart';
+import '../../firebase_service.dart';
 import '../utils/qr_code_generator.dart'; // QRコード生成ユーティリティ（別途作成が必要）
+import '../../event_title_edit_view.dart'; // EventTitleEditView
+import '../../duration_editor_view.dart'; // DurationEditorView
+import '../../event_image_edit_page.dart'; // EventImageEditPage
+import 'problem_edit_page.dart'; // ProblemEditPage
+import 'qr_code_display_page.dart'; // QRCodeDisplayPage
 
 // ダミーのエラーハンドリングクラス（FirebaseServiceErrorと連携）
 class FirebaseServiceError implements Exception {
@@ -118,16 +123,9 @@ class ProblemManagementPage extends StatefulWidget {
 class _ProblemManagementPageState extends State<ProblemManagementPage> {
   // Swiftの @State 変数に対応
   late Event _currentEvent; // 編集可能な状態としてローカルに保持
-  Problem? _showProblemEditor; // 編集対象の問題
-  bool _isAddingNewProblem = false;
-  bool _showDurationEditor = false;
-  bool _showTitleEditor = false;
   bool _isSaving = false;
   bool _showError = false;
   String _errorMessage = "";
-  bool _showQRCodeGenerator = false;
-  // QRコード生成後のイメージはStateには保持せず、生成ロジック内で処理するか、
-  // QRコード表示用の画面に渡すデータとして用意します。
 
   final FirebaseService _firebaseService = FirebaseService(); // Singleton インスタンスを取得
 
@@ -225,7 +223,7 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
   /// イベントタイトルの更新（EventTitleEditView内で直接行うのが理想だが、ここでは保存後に親を更新）
   void _updateEventTitle(String newTitle) {
     setState(() {
-      _currentEvent = _currentEvent.copyWith(title: newTitle);
+      _currentEvent = _currentEvent.copyWith(name: newTitle);
     });
     // タイトル変更後、Firebaseに保存
     _saveEventToFirebase();
@@ -237,7 +235,7 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
     // 1. QRコードデータの生成
     final qrData = QRCodeGenerator.generateQRCodeData(
       // Swiftの event.name, event.eventDate に対応するフィールドを使用
-      eventName: _currentEvent.title, // Event.name -> Event.title に変更を仮定
+      eventName: _currentEvent.name,
       eventId: _currentEvent.id,
       // NOTE: Eventモデルに eventDate がないため、ここでは現在時刻を仮定
       eventDate: DateTime.now(), 
@@ -251,11 +249,16 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
     // 3. Firebaseに保存
     await _saveEventToFirebase();
     
-    // 4. QRコード表示画面を表示
+    // 4. QRコード表示画面へ遷移
     if (mounted) {
-      setState(() {
-        _showQRCodeGenerator = true;
-      });
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => QRCodeDisplayPage(
+            qrCodeData: qrData,
+            eventName: _currentEvent.name,
+          ),
+        ),
+      );
     }
   }
 
@@ -266,6 +269,117 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
       _errorMessage = message;
       _showError = true;
     });
+  }
+
+  /// イベントタイトル編集ページへ遷移
+  Future<void> _navigateToEventTitleEdit(BuildContext context, {Event? event}) async {
+    // 新規イベントの場合はデフォルトのEventオブジェクトを作成
+    final eventToEdit = event ??
+        Event(
+          name: '',
+          duration: 60, // デフォルト値
+          creationPasscode: '1115', // デフォルト値
+          isVisible: true,
+        );
+
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => EventTitleEditView(
+          event: eventToEdit,
+          onUpdate: (updatedEvent) {
+            // 更新されたイベントでローカル状態を更新
+            if (event == null) {
+              // 新規イベント作成の場合
+              setState(() {
+                _currentEvent = updatedEvent;
+              });
+              // 親に更新を通知
+              widget.onEventUpdated(updatedEvent);
+            } else {
+              // 既存イベント編集の場合
+              setState(() {
+                _currentEvent = updatedEvent;
+              });
+              // 親に更新を通知
+              widget.onEventUpdated(updatedEvent);
+            }
+          },
+        ),
+      ),
+    );
+    
+    // 画面から戻ってきたら、必要に応じてリストを更新
+    // EventTitleEditView内で既にFirebaseに保存されているので、
+    // ここではローカル状態と親への通知のみ行う
+    if (mounted) {
+      widget.onEventUpdated(_currentEvent);
+    }
+  }
+
+  /// 制限時間設定ページへ遷移
+  Future<void> _navigateToDurationEditor(BuildContext context) async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => DurationEditorView(
+          initialDuration: _currentEvent.duration,
+        ),
+      ),
+    );
+    
+    // 保存された場合（nullでない場合）、制限時間を更新
+    if (result != null && mounted) {
+      _updateEventDuration(result);
+    }
+  }
+
+  /// 問題編集ページへ遷移
+  Future<void> _navigateToProblemEdit(BuildContext context, Problem? problem) async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ProblemEditPage(
+          initialProblem: problem,
+          onSave: (updatedProblem) {
+            if (problem == null) {
+              // 新規作成の場合
+              _addProblem(updatedProblem);
+            } else {
+              // 既存の問題を更新
+              _updateProblem(updatedProblem);
+            }
+            // Firebaseに保存
+            _saveEventToFirebase();
+          },
+          eventId: _currentEvent.id,
+        ),
+      ),
+    );
+    
+    // 画面から戻ってきたら、必要に応じて更新
+    // ProblemEditPage内でonSaveが呼ばれているので、ここでは特に処理不要
+  }
+
+  /// イベント画像編集ページへ遷移
+  Future<void> _navigateToEventImageEdit(BuildContext context) async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => EventImageEditPage(
+          initialEvent: _currentEvent,
+          onEventUpdated: (updatedEvent) {
+            // 更新されたイベントでローカル状態を更新
+            setState(() {
+              _currentEvent = updatedEvent;
+            });
+            // 親に更新を通知
+            widget.onEventUpdated(updatedEvent);
+          },
+        ),
+      ),
+    );
+    
+    // 画面から戻ってきたら、必要に応じて更新
+    if (mounted) {
+      widget.onEventUpdated(_currentEvent);
+    }
   }
 
   // MARK: - ビルドメソッド
@@ -279,11 +393,8 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
-            onPressed: () {
-              setState(() {
-                _isAddingNewProblem = true;
-              });
-            },
+            onPressed: () => _navigateToEventTitleEdit(context),
+            tooltip: '新規イベント作成',
           ),
         ],
       ),
@@ -297,43 +408,61 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  _currentEvent.title, // Swiftの event.name に相当
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
+                // タイトルと制限時間を同じ行に配置
                 Row(
                   children: [
-                    // 制限時間表示
+                    Expanded(
+                      child: Text(
+                        _currentEvent.name, // Swiftの event.name に相当
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
                     Text(
                       "制限時間: ${_currentEvent.duration}分",
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey[700]),
                     ),
-                    const Spacer(),
-                    
-                    // タイトル編集ボタン
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.edit, size: 14),
-                      label: const Text("タイトル編集", style: TextStyle(fontSize: 10)),
-                      onPressed: () => setState(() => _showTitleEditor = true),
-                    ),
-                    const SizedBox(width: 8),
-
-                    // 時間設定ボタン
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.access_time, size: 14),
-                      label: const Text("時間設定", style: TextStyle(fontSize: 10)),
-                      onPressed: () => setState(() => _showDurationEditor = true),
-                    ),
-                    const SizedBox(width: 8),
-                    
-                    // QRコード作成ボタン
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.qr_code, size: 14),
-                      label: const Text("QRコード作成", style: TextStyle(fontSize: 10)),
-                      onPressed: _createQRCode,
-                    ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                // ボタンをSingleChildScrollViewで囲んでオーバーフローを防ぐ
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // タイトル編集ボタン
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.edit, size: 14),
+                        label: const Text("タイトル編集", style: TextStyle(fontSize: 8,fontWeight: FontWeight.bold,)),
+                        onPressed: () => _navigateToEventTitleEdit(context, event: _currentEvent),
+                      ),
+                      const SizedBox(width: 6),
+
+                      // 時間設定ボタン
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.access_time, size: 14),
+                        label: const Text("時間設定", style: TextStyle(fontSize: 8,fontWeight: FontWeight.bold,)),
+                        onPressed: () => _navigateToDurationEditor(context),
+                      ),
+                      const SizedBox(width: 6),
+                      
+                      // QRコード作成ボタン
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.qr_code, size: 14),
+                        label: const Text("QRコード作成", style: TextStyle(fontSize: 8,fontWeight: FontWeight.bold,)),
+                        onPressed: _createQRCode,
+                      ),
+                      const SizedBox(width: 6),
+                      
+                      // イベント画像ボタン
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.image, size: 14),
+                        label: const Text("イベント画像", style: TextStyle(fontSize: 8,fontWeight: FontWeight.bold,)),
+                        onPressed: () => _navigateToEventImageEdit(context),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -359,11 +488,7 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
                   },
                   child: ProblemRow(
                     problem: problem,
-                    onEdit: () {
-                      setState(() {
-                        _showProblemEditor = problem;
-                      });
-                    },
+                    onEdit: () => _navigateToProblemEdit(context, problem),
                   ),
                 );
               },
@@ -376,86 +501,6 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
       bottomNavigationBar: _isSaving
           ? const LinearProgressIndicator()
           : null,
-      
-      // MARK: - Modals / Sheets (Swiftの .sheet に相当)
-      
-      // 既存問題の編集シート
-      // NOTE: ProblemEditPageを別途実装する必要があります
-      // ここでは、Bottom Sheetで表示する例を示します
-      // Swiftの .sheet(item: $showProblemEditor) に相当
-      bottomSheet: _showProblemEditor != null
-          ? SizedBox(
-              height: MediaQuery.of(context).size.height * 0.9,
-              child: ProblemEditPage(
-                initialProblem: _showProblemEditor!,
-                onSave: (updatedProblem) {
-                  _updateProblem(updatedProblem); // ローカルのリストを更新
-                  _showProblemEditor = null; // シートを閉じる
-                  _saveEventToFirebase();
-                  setState(() {});
-                },
-                onCancel: () {
-                  _showProblemEditor = null;
-                  setState(() {});
-                },
-                eventId: _currentEvent.id,
-              ),
-            )
-          : null,
     );
   }
 }
-
-// --------------------------------------------------------------------------
-// 3. ダミーウィジェット (ProblemEditPage, DurationEditorView, EventTitleEditView, QRCodeDisplayView)
-// --------------------------------------------------------------------------
-
-// NOTE: 実際のロジックに合わせて別途実装が必要です。
-
-class ProblemEditPage extends StatelessWidget {
-  final Problem initialProblem;
-  final ValueChanged<Problem> onSave;
-  final VoidCallback onCancel;
-  final String eventId;
-
-  const ProblemEditPage({
-    super.key,
-    required this.initialProblem,
-    required this.onSave,
-    required this.onCancel,
-    required this.eventId,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        children: [
-          Text('問題編集 (ID: ${initialProblem.id})', style: Theme.of(context).textTheme.headlineMedium),
-          const SizedBox(height: 20),
-          TextField(
-            controller: TextEditingController(text: initialProblem.text),
-            decoration: const InputDecoration(labelText: '問題文'),
-          ),
-          const Spacer(),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton(onPressed: onCancel, child: const Text('キャンセル')),
-              ElevatedButton(
-                onPressed: () {
-                  // TODO: 実際の編集ロジックを反映させる
-                  onSave(initialProblem.copyWith(text: '編集後の問題文')); 
-                  Navigator.pop(context); // シートを閉じる
-                },
-                child: const Text('保存'),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-// DurationEditorView, EventTitleEditView, QRCodeDisplayView も同様にダミーが必要です。

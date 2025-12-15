@@ -4,45 +4,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-
-// --- 仮定されるデータモデルとサービス ---
-// 実際のプロジェクトに合わせて調整してください。
-
-// Event モデルの仮定
-class Event {
-  final String id;
-  String? cardImageUrl;
-  // 他のプロパティ...
-  
-  Event({required this.id, this.cardImageUrl});
-
-  // Eventのコピーを作成するメソッド (SwiftUIのBinding相当の振る舞いをサポートするため)
-  Event copyWith({String? cardImageUrl}) {
-    return Event(
-      id: id,
-      cardImageUrl: cardImageUrl ?? this.cardImageUrl,
-    );
-  }
-}
-
-// Firebase サービスの仮定 (実際のFirebase処理をここに実装)
-class FirebaseService {
-  static final FirebaseService shared = FirebaseService._internal();
-  FirebaseService._internal();
-
-  Future<String> uploadEventCardImage(File imageFile, {required String eventId}) async {
-    // 実際はFirebase Storageにアップロード
-    await Future.delayed(const Duration(seconds: 2)); // アップロードのシミュレーション
-    return 'https://example.com/images/$eventId/card_image.jpg'; // 仮のURLを返す
-  }
-
-  Future<void> saveEventToFirebase(Event event, {required String passcode}) async {
-    // 実際はFirestoreにEventデータを保存
-    await Future.delayed(const Duration(milliseconds: 500)); // 保存のシミュレーション
-    print('Event saved: ${event.cardImageUrl}');
-  }
-}
-// ------------------------------------
+import 'lib/models/event.dart'; // 正規のEventモデル
+import 'firebase_service.dart'; // FirebaseService
 
 
 class EventImageEditPage extends StatefulWidget {
@@ -66,9 +29,8 @@ class _EventImageEditPageState extends State<EventImageEditPage> {
   String? _cardImageURL; // Firebaseにアップロード済みのURL
   bool _isUploading = false;
   String? _uploadError;
-  bool _showErrorAlert = false;
 
-  final FirebaseService _firebaseService = FirebaseService.shared;
+  final FirebaseService _firebaseService = FirebaseService();
   final ImagePicker _picker = ImagePicker();
 
   @override
@@ -98,10 +60,21 @@ class _EventImageEditPageState extends State<EventImageEditPage> {
   // SwiftUIの uploadImage() に相当
   Future<void> _uploadImage() async {
     if (_selectedImageFile == null) {
-      setState(() {
-        _uploadError = "画像が選択されていません";
-        _showErrorAlert = true;
-      });
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('エラー'),
+            content: const Text('画像が選択されていません'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
       return;
     }
 
@@ -126,8 +99,22 @@ class _EventImageEditPageState extends State<EventImageEditPage> {
       setState(() {
         _isUploading = false;
         _uploadError = "画像のアップロードに失敗しました: ${e.toString()}";
-        _showErrorAlert = true;
       });
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('エラー'),
+            content: Text(_uploadError ?? '画像のアップロードに失敗しました'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
     }
   }
 
@@ -160,8 +147,22 @@ class _EventImageEditPageState extends State<EventImageEditPage> {
         setState(() {
           _isUploading = false;
           _uploadError = "画像のアップロードに失敗しました: ${e.toString()}";
-          _showErrorAlert = true;
         });
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('エラー'),
+              content: Text(_uploadError ?? '画像のアップロードに失敗しました'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
       }
       return;
     }
@@ -179,9 +180,7 @@ class _EventImageEditPageState extends State<EventImageEditPage> {
 
     // Firebaseに保存
     try {
-      // パスコードはUserDefaultから取得するなど、実際のロジックに合わせる
-      const passcode = "samplePasscode"; 
-      await _firebaseService.saveEventToFirebase(updatedEvent, passcode: passcode);
+      await _firebaseService.saveEvent(updatedEvent);
 
       widget.onEventUpdated(updatedEvent); // 親ウィジェットに更新を通知
       if (mounted) {
@@ -190,8 +189,22 @@ class _EventImageEditPageState extends State<EventImageEditPage> {
     } catch (e) {
       setState(() {
         _uploadError = "保存に失敗しました: ${e.toString()}";
-        _showErrorAlert = true;
       });
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('エラー'),
+            content: Text(_uploadError ?? '保存に失敗しました'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
     }
   }
 
@@ -355,29 +368,6 @@ class _EventImageEditPageState extends State<EventImageEditPage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// プレビューの代わり (main.dart などから呼び出す想定)
-class EventImageEditPreview extends StatelessWidget {
-  EventImageEditPreview({super.key});
-
-  final Event sampleEvent = Event(
-    id: 'sample-uuid',
-    cardImageUrl: null, // 初期値は画像なし
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      home: EventImageEditPage(
-        initialEvent: sampleEvent,
-        onEventUpdated: (updatedEvent) {
-          print("Event updated: ${updatedEvent.cardImageUrl}");
-          // 実際は状態管理 (Provider/Riverpod) でEventを更新
-        },
       ),
     );
   }
