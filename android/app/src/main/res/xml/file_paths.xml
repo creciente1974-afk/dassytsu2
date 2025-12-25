@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- image_pickerプラグイン用の一時ファイルパス -->
+    <cache-path name="image_picker_cache" path="." />
+    <external-cache-path name="image_picker_external_cache" path="." />
+    <external-files-path name="image_picker_external_files" path="." />
+    <files-path name="image_picker_files" path="." />
+</paths>
