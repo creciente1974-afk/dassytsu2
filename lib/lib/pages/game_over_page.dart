@@ -65,11 +65,11 @@ class GameOverPage extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(left: 40, right: 40, bottom: 40),
             child: ElevatedButton.icon(
-              // イベント一覧ページに戻る（ゲームオーバーになったイベントIDを渡す）
+              // イベント一覧ページに戻る
               onPressed: () {
                 Navigator.of(context).pushAndRemoveUntil(
                   MaterialPageRoute(
-                    builder: (context) => EventListPage(gameOverEventId: eventId),
+                    builder: (context) => const EventListPage(),
                   ),
                   (Route<dynamic> route) => false, // スタックを全てクリア
                 );

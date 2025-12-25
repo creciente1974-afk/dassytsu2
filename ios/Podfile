@@ -1,5 +1,5 @@
 # Uncomment this line to define a global platform for your project
- platform :ios, '13.0'
+ platform :ios, '15.5'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -24,11 +24,13 @@ def flutter_root
 end
 
 require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+require 'xcodeproj'
 
 flutter_ios_podfile_setup
 
 target 'Runner' do
   use_frameworks!
+  use_modular_headers!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
@@ -39,22 +41,410 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
-
-    # iOS deployment targetを13.0以上に統一（Podfileの設定と一致させる）
+    
+    # iOS deployment targetを15.5以上に統一（Podfileの設定と一致させる）
     target.build_configurations.each do |config|
-      if config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'].to_f < 13.0
-        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      if config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'].to_f < 15.5
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
       end
-      
-      # VENDORED_EXTERNAL_PROJECTS の設定を追加してモジュールエラーを解消
-      if target.name == 'Firebase'
-        config.build_settings['VENDORED_EXTERNAL_PROJECTS'] = 'Pods/Firebase/CoreOnly/Sources/Firebase.modulemap'
+      # Apple Silicon Mac用にarm64を除外しないように設定（すべてのターゲット）
+      excluded_archs = config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]']
+      if excluded_archs && excluded_archs.to_s.include?('arm64')
+        # arm64を除外リストから削除（Apple Silicon Macでは必要）
+        new_excluded = excluded_archs.to_s.split(/\s+/).reject { |arch| arch == 'arm64' }.join(' ')
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = new_excluded.strip.empty? ? '' : new_excluded.strip
       end
-
-      # Firebase系のライブラリのモジュールマップを再設定
-      config.build_settings['DEFINES_MODULE'] = 'YES'
-      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
-      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'COCOAPODS=1'
+      # mobile_scannerモジュールの検索パスを追加
+      if target.name == 'mobile_scanner'
+        config.build_settings['DEFINES_MODULE'] = 'YES'
+        config.build_settings['SWIFT_INCLUDE_PATHS'] ||= []
+        config.build_settings['SWIFT_INCLUDE_PATHS'] << '$(PODS_TARGET_SRCROOT)'
+        # モジュールマップのパスを明示的に設定
+        modulemap_path = File.join(installer.sandbox.root, 'Target Support Files', 'mobile_scanner', 'mobile_scanner.modulemap')
+        if File.exist?(modulemap_path)
+          config.build_settings['MODULEMAP_FILE'] = modulemap_path
+        end
+        # arm64を確実に除外しないように設定
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386 armv7'
+      end
     end
   end
+  
+  # Pods-Runnerターゲットの設定も修正
+  installer.pods_project.targets.each do |target|
+    if target.name == 'Pods-Runner'
+      target.build_configurations.each do |config|
+        excluded_archs = config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]']
+        if excluded_archs && excluded_archs.to_s.include?('arm64')
+          new_excluded = excluded_archs.to_s.split(/\s+/).reject { |arch| arch == 'arm64' }.join(' ')
+          config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = new_excluded.strip.empty? ? '' : new_excluded.strip
+        end
+        # use_frameworks!を使っている場合、Pods_Runnerフレームワークは不要
+        # OTHER_LDFLAGSからPods_Runnerへの参照を削除
+        other_ldflags = config.build_settings['OTHER_LDFLAGS']
+        if other_ldflags && other_ldflags.to_s.include?('Pods_Runner')
+          new_ldflags = other_ldflags.to_s.gsub(/-framework\s+"?Pods_Runner"?/, '').gsub(/\s+/, ' ').strip
+          config.build_settings['OTHER_LDFLAGS'] = new_ldflags
+        end
+      end
+    end
+  end
+  
+  # xcconfigファイルの直接編集は非推奨のため削除
+  # 代わりにbuild_settingsで直接設定（CocoaPods標準方式）
+  
+  # wakelock_plusプラグインのヘッダーファイルパスを追加（CocoaPods標準方式）
+  installer.pods_project.targets.each do |target|
+    if target.name == 'wakelock_plus'
+      target.build_configurations.each do |config|
+        header_search_paths = Array(config.build_settings['HEADER_SEARCH_PATHS'] || [])
+        header_search_paths.unshift('$(inherited)') unless header_search_paths.include?('$(inherited)')
+        
+        additional_paths = [
+          '$(PODS_TARGET_SRCROOT)/Sources/wakelock_plus/include',
+          '$(PODS_TARGET_SRCROOT)/Sources/wakelock_plus/Sources/wakelock_plus/include',
+        ]
+        additional_paths.each do |path|
+          header_search_paths << path unless header_search_paths.any? { |p| p.to_s.include?(path) }
+        end
+        
+        config.build_settings['HEADER_SEARCH_PATHS'] = header_search_paths.uniq
+        config.build_settings['USER_HEADER_SEARCH_PATHS'] = header_search_paths.uniq
+      end
+    end
+  end
+  
+  # MLKit関連フレームワークのアーキテクチャ対応設定
+  # 実機ビルド（arm64）とシミュレータービルド（x86_64/arm64）の両方に対応
+  mlkit_frameworks = ['MLImage', 'MLKitBarcodeScanning', 'MLKitCommon', 'MLKitVision']
+  
+  # MLKitフレームワークのアーキテクチャを確認し、シミュレータービルド用にarm64スライスを削除
+  mlkit_frameworks.each do |framework_name|
+    framework_dir = File.join(installer.sandbox.root, framework_name, 'Frameworks', "#{framework_name}.framework")
+    framework_binary = File.join(framework_dir, framework_name)
+    
+    if File.exist?(framework_binary)
+      architectures_output = `lipo -info "#{framework_binary}" 2>&1`.strip
+      has_arm64 = architectures_output.include?('arm64')
+      has_x86_64 = architectures_output.include?('x86_64')
+      
+      if has_arm64 && has_x86_64
+        puts "✓ #{framework_name}: has both arm64 and x86_64 architectures"
+        # arm64スライスを保持（Apple Siliconシミュレーター対応のため）
+        # 注: MLKitフレームワークのarm64スライスはデバイス用ですが、シミュレーターでも動作する可能性があります
+      elsif !has_arm64 && has_x86_64
+        puts "⚠ #{framework_name}: missing arm64 architecture (device build will fail)"
+      elsif has_arm64
+        puts "✓ #{framework_name}: supports arm64 architecture"
+      end
+    end
+  end
+  
+  # MLKitフレームワークのリンク設定（CocoaPods標準方式）
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      # フレームワーク検索パスの設定
+      framework_search_paths = Array(config.build_settings['FRAMEWORK_SEARCH_PATHS'] || [])
+      
+      mlkit_frameworks.each do |framework_name|
+        framework_dir = File.join(installer.sandbox.root, framework_name, 'Frameworks')
+        if File.exist?(framework_dir)
+          framework_path = "\"#{framework_dir}\""
+          framework_search_paths << framework_path unless framework_search_paths.any? { |p| p.to_s.include?(framework_name) }
+        end
+      end
+      
+      config.build_settings['FRAMEWORK_SEARCH_PATHS'] = framework_search_paths.uniq
+    end
+  end
+  
+  # GoogleDataTransportのヘッダーファイル検索パスを修正（CocoaPods標準設定を尊重）
+  installer.pods_project.targets.each do |target|
+    if target.name == 'GoogleDataTransport'
+      # PromisesObjCへの依存関係を明示的に追加（ビルド順序を保証）
+      promises_target = installer.pods_project.targets.find { |t| t.name == 'PromisesObjC' }
+      if promises_target && !target.dependencies.any? { |d| d.target == promises_target }
+        target.add_dependency(promises_target)
+      end
+      
+      target.build_configurations.each do |config|
+        # HEADER_SEARCH_PATHSを配列として取得（CocoaPods標準形式）
+        header_search_paths = Array(config.build_settings['HEADER_SEARCH_PATHS'] || [])
+        
+        # $(inherited)を最初に追加（xcconfigから読み込まれるパスを含める）
+        header_search_paths.unshift('$(inherited)') unless header_search_paths.include?('$(inherited)')
+        
+        # 必要なパスを追加（既存のパスをチェック）
+        required_paths = {
+          '${PODS_ROOT}' => '"${PODS_ROOT}"',
+          '${PODS_ROOT}/GoogleDataTransport' => '"${PODS_ROOT}/GoogleDataTransport"',
+          '${PODS_ROOT}/PromisesObjC/Sources/FBLPromises/include' => '"${PODS_ROOT}/PromisesObjC/Sources/FBLPromises/include"'
+        }
+        
+        required_paths.each do |key, path|
+          unless header_search_paths.any? { |p| p.to_s.include?(key) }
+            header_search_paths << path
+          end
+        end
+        
+        config.build_settings['HEADER_SEARCH_PATHS'] = header_search_paths.uniq
+        
+        # USER_HEADER_SEARCH_PATHSも設定（"FBLPromises.h"形式のインクルードに対応）
+        user_header_search_paths = Array(config.build_settings['USER_HEADER_SEARCH_PATHS'] || [])
+        user_header_search_paths.unshift('$(inherited)') unless user_header_search_paths.include?('$(inherited)')
+        promises_path = '"${PODS_ROOT}/PromisesObjC/Sources/FBLPromises/include"'
+        unless user_header_search_paths.any? { |p| p.to_s.include?('PromisesObjC') }
+          user_header_search_paths << promises_path
+        end
+        config.build_settings['USER_HEADER_SEARCH_PATHS'] = user_header_search_paths.uniq
+        
+        # フレームワーク検索パスも確認（<FBLPromises/FBLPromises.h>形式に対応）
+        framework_search_paths = Array(config.build_settings['FRAMEWORK_SEARCH_PATHS'] || [])
+        framework_search_paths.unshift('$(inherited)') unless framework_search_paths.include?('$(inherited)')
+        promises_framework_path = '${PODS_CONFIGURATION_BUILD_DIR}/PromisesObjC'
+        unless framework_search_paths.any? { |p| p.to_s.include?('PromisesObjC') }
+          framework_search_paths << promises_framework_path
+        end
+        config.build_settings['FRAMEWORK_SEARCH_PATHS'] = framework_search_paths.uniq
+      end
+    end
+  end
+  
+  # use_frameworks!使用時にPods_Runner.framework参照を削除
+  # Pods_Runner.frameworkはuse_frameworks!を使用している場合には存在しないため、プロジェクトから参照を削除
+  runner_project_path = File.join(installer.sandbox.root, '..', 'Runner.xcodeproj', 'project.pbxproj')
+  if File.exist?(runner_project_path)
+    project_content = File.read(runner_project_path)
+    # Pods_Runner.frameworkへの参照を削除（より包括的なパターン）
+    project_content.gsub!(/^\s*[A-Z0-9]{24}\s*\/\*\s*Pods_Runner\.framework.*?\n/, '')
+    project_content.gsub!(/^\s*[A-Z0-9]{24}\s*\/\*\s*Pods_Runner\.framework in Frameworks.*?\n/, '')
+    # Frameworks build phaseから空の配列を残す
+    project_content.gsub!(/files = \(\s*\n\s*[A-Z0-9]{24}\s*\/\*\s*Pods_Runner\.framework in Frameworks.*?\n\s*\);/m, 'files = (\n\t\t\t);')
+    # Frameworks groupから参照を削除
+    project_content.gsub!(/\s*[A-Z0-9]{24}\s*\/\*\s*Pods_Runner\.framework.*?\n/, '')
+    # PBXBuildFileセクションから削除
+    project_content.gsub!(/^\s*[A-Z0-9]{24}\s*\/\*\s*Pods_Runner\.framework in Frameworks \*\/ = \{isa = PBXBuildFile;.*?\n\s*\};?\n/, '')
+    # PBXFileReferenceセクションから削除
+    project_content.gsub!(/^\s*[A-Z0-9]{24}\s*\/\*\s*Pods_Runner\.framework \*\/ = \{isa = PBXFileReference;.*?\n\s*\};?\n/, '')
+    File.write(runner_project_path, project_content)
+  end
+  
+  # Pods-RunnerターゲットのOTHER_LDFLAGSからPods_Runnerへの参照を削除
+  installer.pods_project.targets.each do |target|
+    if target.name == 'Pods-Runner'
+      target.build_configurations.each do |config|
+        other_ldflags = config.build_settings['OTHER_LDFLAGS']
+        if other_ldflags
+          if other_ldflags.is_a?(String)
+            new_ldflags = other_ldflags.gsub(/-framework\s+"?Pods_Runner"?/, '').gsub(/\s+/, ' ').strip
+            config.build_settings['OTHER_LDFLAGS'] = new_ldflags unless new_ldflags == other_ldflags
+          elsif other_ldflags.is_a?(Array)
+            new_ldflags = other_ldflags.reject { |flag| flag.to_s.include?('Pods_Runner') }
+            config.build_settings['OTHER_LDFLAGS'] = new_ldflags unless new_ldflags == other_ldflags
+          end
+        end
+        # PRODUCT_NAMEを確認（Pods_Runnerになっている可能性がある）
+        if config.build_settings['PRODUCT_NAME'] == 'Pods_Runner'
+          # use_frameworks!使用時はPods_Runnerフレームワークは作成されない
+          # この設定は無視されるが、念のため確認
+        end
+      end
+    end
+  end
+  
+  # Runnerターゲットのリンカー設定からPods_Runnerを完全に削除
+  # use_frameworks!使用時はPods_Runnerフレームワークは存在しないため
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      # すべてのターゲットでPods_Runnerへの参照を削除
+      other_ldflags = config.build_settings['OTHER_LDFLAGS']
+      if other_ldflags
+        if other_ldflags.is_a?(String)
+          new_ldflags = other_ldflags.gsub(/-framework\s+"?Pods_Runner"?/, '').gsub(/\s+/, ' ').strip
+          config.build_settings['OTHER_LDFLAGS'] = new_ldflags unless new_ldflags == other_ldflags
+        elsif other_ldflags.is_a?(Array)
+          new_ldflags = other_ldflags.reject { |flag| flag.to_s.match?(/-framework\s+"?Pods_Runner"?/) }
+          config.build_settings['OTHER_LDFLAGS'] = new_ldflags unless new_ldflags == other_ldflags
+        end
+      end
+    end
+  end
+  
+  # RunnerプロジェクトのターゲットからもPods_Runner参照を削除
+  runner_project = Xcodeproj::Project.open(File.join(installer.sandbox.root, '..', 'Runner.xcodeproj'))
+  runner_project.targets.each do |target|
+    if target.name == 'Runner'
+      target.build_configurations.each do |config|
+        other_ldflags = config.build_settings['OTHER_LDFLAGS']
+        if other_ldflags
+          if other_ldflags.is_a?(String)
+            new_ldflags = other_ldflags.gsub(/-framework\s+"?Pods_Runner"?/, '').gsub(/-Wl,-weak_framework,Pods_Runner/, '').gsub(/\s+/, ' ').strip
+            config.build_settings['OTHER_LDFLAGS'] = new_ldflags unless new_ldflags == other_ldflags
+          elsif other_ldflags.is_a?(Array)
+            new_ldflags = other_ldflags.reject { |flag| flag.to_s.include?('Pods_Runner') }
+            config.build_settings['OTHER_LDFLAGS'] = new_ldflags unless new_ldflags == other_ldflags
+          end
+        end
+        # シミュレータービルドでarm64を許可（Apple Siliconシミュレーター対応のため）
+        # 古いアーキテクチャのみを除外
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386 armv7'
+        # Apple Siliconシミュレーター用にarm64を優先
+        if config.build_settings['PLATFORM_NAME'] == 'iphonesimulator'
+          config.build_settings['ARCHS[sdk=iphonesimulator*]'] = 'arm64 x86_64'
+          config.build_settings['ONLY_ACTIVE_ARCH'] = 'YES'
+        end
+      end
+    end
+  end
+  runner_project.save
+  
+  # MLKitフレームワークのシミュレータービルド対応
+  # デバイス専用arm64スライスを削除するスクリプトを追加（リンク前に実行）
+  runner_project.targets.each do |target|
+    if target.name == 'Runner'
+      # 既存のスクリプトフェーズを確認
+      existing_script = target.shell_script_build_phases.find { |phase| phase.name == 'Strip MLKit Device Slices for Simulator' }
+      
+      if existing_script.nil?
+        # 新しいスクリプトフェーズを作成（Frameworks build phaseの前に配置）
+        script_phase = target.new_shell_script_build_phase('Strip MLKit Device Slices for Simulator')
+        script_phase.shell_script = <<~SCRIPT
+          # MLKitフレームワークからデバイス専用arm64スライスを削除（シミュレータービルド用）
+          if [ "${PLATFORM_NAME}" = "iphonesimulator" ]; then
+            # MLKitフレームワークのパス（ビルド済みフレームワークを優先）
+            MLKIT_FRAMEWORKS=(
+              "${BUILT_PRODUCTS_DIR}/MLImage.framework/MLImage"
+              "${BUILT_PRODUCTS_DIR}/MLKitBarcodeScanning.framework/MLKitBarcodeScanning"
+              "${BUILT_PRODUCTS_DIR}/MLKitCommon.framework/MLKitCommon"
+              "${BUILT_PRODUCTS_DIR}/MLKitVision.framework/MLKitVision"
+              "${PODS_CONFIGURATION_BUILD_DIR}/MLImage/MLImage.framework/MLImage"
+              "${PODS_CONFIGURATION_BUILD_DIR}/MLKitBarcodeScanning/MLKitBarcodeScanning.framework/MLKitBarcodeScanning"
+              "${PODS_CONFIGURATION_BUILD_DIR}/MLKitCommon/MLKitCommon.framework/MLKitCommon"
+              "${PODS_CONFIGURATION_BUILD_DIR}/MLKitVision/MLKitVision.framework/MLKitVision"
+            )
+            
+            for binary in "${MLKIT_FRAMEWORKS[@]}"; do
+              if [ -f "$binary" ]; then
+                # アーキテクチャを確認
+                archs=$(lipo -info "$binary" 2>&1)
+                if echo "$archs" | grep -q "arm64" && echo "$archs" | grep -q "x86_64"; then
+                  # arm64とx86_64の両方がある場合、arm64（デバイス用）を削除
+                  echo "Stripping device-only arm64 slice from $binary for simulator build"
+                  # 一時ファイルを作成してから置き換え
+                  TEMP_FILE="${binary}.lipo_tmp"
+                  if lipo "$binary" -remove arm64 -output "$TEMP_FILE" 2>&1; then
+                    if [ -f "$TEMP_FILE" ]; then
+                      chmod +w "$binary" 2>/dev/null || true
+                      rm -f "$binary" && mv "$TEMP_FILE" "$binary" || cp "$TEMP_FILE" "$binary" && rm -f "$TEMP_FILE"
+                      echo "Successfully stripped arm64 from $(basename "$binary")"
+                    else
+                      echo "Warning: Temp file not created for $binary"
+                    fi
+                  else
+                    echo "Warning: Failed to strip arm64 from $binary (lipo command failed)"
+                  fi
+                fi
+              fi
+            done
+          fi
+        SCRIPT
+        script_phase.run_only_for_deployment_postprocessing = '0'
+        script_phase.show_env_vars_in_log = '1'  # デバッグ用にログを有効化
+        
+        # スクリプトフェーズをFrameworks build phaseの前に移動（リンク前に実行）
+        frameworks_phase = target.frameworks_build_phase
+        if frameworks_phase
+          script_phase_index = target.build_phases.index(script_phase)
+          frameworks_index = target.build_phases.index(frameworks_phase)
+          if script_phase_index && frameworks_index && script_phase_index > frameworks_index
+            target.build_phases.delete(script_phase)
+            target.build_phases.insert(frameworks_index, script_phase)
+          end
+        end
+      end
+    end
+  end
+  runner_project.save
+  
+  # Runnerターゲットのビルド設定
+  # Apple Silicon Macではarm64シミュレーターをサポート
+  runner_project.targets.each do |target|
+    if target.name == 'Runner'
+      target.build_configurations.each do |config|
+        # シミュレータービルドでi386とarmv7のみを除外（arm64は許可）
+        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386 armv7'
+      end
+    end
+  end
+  runner_project.save
+  
+  # モジュールとして認識されるように設定（CocoaPods標準方式）
+  ['OrderedSet', 'GoogleUtilities', 'SwiftyGif'].each do |module_name|
+    installer.pods_project.targets.each do |target|
+      if target.name == module_name
+        target.build_configurations.each do |config|
+          config.build_settings['DEFINES_MODULE'] = 'YES'
+          config.build_settings['SWIFT_VERSION'] = '5.0' if module_name == 'OrderedSet'
+        end
+      end
+    end
+  end
+  
+  # モジュール依存関係を修正（CocoaPods標準方式）
+  # すべてのターゲットでモジュール検索パスを統一
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      # Swiftモジュール検索パスに$(inherited)を追加
+      swift_module_search_paths = Array(config.build_settings['SWIFT_INCLUDE_PATHS'] || [])
+      swift_module_search_paths.unshift('$(inherited)') unless swift_module_search_paths.include?('$(inherited)')
+      config.build_settings['SWIFT_INCLUDE_PATHS'] = swift_module_search_paths.uniq
+      
+      # フレームワーク検索パスに$(inherited)を追加
+      framework_search_paths = Array(config.build_settings['FRAMEWORK_SEARCH_PATHS'] || [])
+      framework_search_paths.unshift('$(inherited)') unless framework_search_paths.include?('$(inherited)')
+      config.build_settings['FRAMEWORK_SEARCH_PATHS'] = framework_search_paths.uniq
+      
+      # DEFINES_MODULEを設定（Swiftモジュールとして認識されるように）
+      if target.name.match?(/^(Firebase|Google|GTM|SwiftyGif|OrderedSet)/)
+        config.build_settings['DEFINES_MODULE'] = 'YES'
+      end
+    end
+  end
+  
+  # flutter_inappwebviewのOrderedSetモジュール検索パスを修正（CocoaPods標準方式）
+  installer.pods_project.targets.each do |target|
+    if target.name == 'flutter_inappwebview'
+      target.build_configurations.each do |config|
+        # Swiftモジュール検索パスにOrderedSetフレームワークのパスを追加
+        swift_module_search_paths = Array(config.build_settings['SWIFT_INCLUDE_PATHS'] || [])
+        ordered_set_path = '${PODS_CONFIGURATION_BUILD_DIR}/OrderedSet'
+        unless swift_module_search_paths.include?(ordered_set_path)
+          swift_module_search_paths << ordered_set_path
+          config.build_settings['SWIFT_INCLUDE_PATHS'] = swift_module_search_paths.uniq
+        end
+        
+        # フレームワーク検索パスも確認
+        framework_search_paths = Array(config.build_settings['FRAMEWORK_SEARCH_PATHS'] || [])
+        unless framework_search_paths.include?(ordered_set_path)
+          framework_search_paths << ordered_set_path
+          config.build_settings['FRAMEWORK_SEARCH_PATHS'] = framework_search_paths.uniq
+        end
+      end
+    end
+  end
+  
+  # mobile_scannerプラグインのSwiftヘッダーファイル修正用スクリプトを作成
+  # ビルド時に生成されるヘッダーファイルを修正するスクリプト
+  fix_script_path = File.join(installer.sandbox.root, '..', 'fix_mobile_scanner_header.sh')
+  fix_script = <<~SCRIPT
+    #!/bin/bash
+    # mobile_scanner-Swift.hのobjc_ownershipエラーを修正
+    HEADER_FILE="${TARGET_BUILD_DIR}/mobile_scanner/mobile_scanner.framework/Headers/mobile_scanner-Swift.h"
+    if [ -f "$HEADER_FILE" ]; then
+      sed -i '' 's/__attribute__((objc_ownership([^)]*))) *CVPixelBufferRef/CVPixelBufferRef/g' "$HEADER_FILE"
+      sed -i '' 's/CVPixelBufferRef *__attribute__((objc_ownership([^)]*)))/CVPixelBufferRef/g' "$HEADER_FILE"
+    fi
+  SCRIPT
+  File.write(fix_script_path, fix_script)
+  File.chmod(0755, fix_script_path)
 end

@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -6,10 +9,17 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+// Load keystore properties
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
+}
+
 android {
     namespace = "com.dassyutsu2.dassyutsu_app"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    compileSdk = 36
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -17,7 +27,7 @@ android {
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
+        jvmTarget = "17"
     }
 
     defaultConfig {
@@ -25,33 +35,39 @@ android {
         applicationId = "com.dassyutsu2.dassyutsu_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        minSdk = 24  // Required by purchases_ui_flutter plugin (was 23 for firebase_auth)
+        targetSdk = 35  // Google Play Console requirement: API level 35+ for latest security and performance optimizations
+        versionCode = flutter.versionCode()
+        versionName = flutter.versionName()
+    }
+
+    // Signing configurations
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"]?.toString()
+                keyPassword = keystoreProperties["keyPassword"]?.toString()
+                storeFile = keystoreProperties["storeFile"]?.toString()?.let { storeFilePath: String -> file(storeFilePath) }
+                storePassword = keystoreProperties["storePassword"]?.toString()
+            }
+        }
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }
 
 flutter {
     source = "../.."
-}
-dependencies {
-    // Firebase Android BOM: すべてのFirebaseライブラリのバージョンを管理する（推奨）
-    implementation(platform("com.google.firebase:firebase-bom:34.7.0"))
-    
-    // Firebase Analytics SDK (これは必須級です)
-    implementation("com.google.firebase:firebase-analytics-ktx")
-
-    // 例: もしFirebase Authenticationも使うなら、これも追加します
-    implementation("com.google.firebase:firebase-auth-ktx")
-    
-    // 他の必要なSDKもここに追加します
 }

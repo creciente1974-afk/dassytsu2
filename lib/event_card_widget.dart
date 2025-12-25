@@ -375,7 +375,7 @@ class EventListScreen extends StatelessWidget {
       name: "伝説の地下迷宮からの脱出",
       problems: List.generate(5, (index) => Problem(id: index.toString(), text: "P$index", answer: "A$index")),
       duration: 60,
-      cardImageUrl: "https://example.com/some_image.jpg", // 適切なURLに置き換えてください
+      card_image_url: "https://example.com/some_image.jpg", // 適切なURLに置き換えてください
       eventDate: DateTime.now().add(const Duration(days: 30)),
       comment: "史上最高の難易度！クリアできるかな？",
       records: [

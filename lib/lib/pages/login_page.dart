@@ -139,7 +139,7 @@ class _LoginPageState extends State<LoginPage> {
                 image: DecorationImage(
                   // ⚠️ Image("Top") は、assetsフォルダに画像ファイルを配置し、
                   // pubspec.yamlで設定する必要があります。
-                  image: AssetImage('assets/images/Top.png'), 
+                  image: AssetImage('assets/images/clear_bg.jpg'),
                   fit: BoxFit.cover,
                 ),
               ),
@@ -151,25 +151,31 @@ class _LoginPageState extends State<LoginPage> {
           ),
           
           // MARK: - コンテンツ (VStackに相当)
-          Center(
+          Align(
+            alignment: Alignment.bottomRight, // 右下に配置
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 40),
+              padding: const EdgeInsets.all(40),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.end, // ボタンを下に寄せる
-                crossAxisAlignment: CrossAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end, // 右寄せ
                 children: [
-                  const Spacer(), // Spacer() (上部の余白)
-                  
-                  // タイトルなど（必要に応じて追加する部分）
-                  // 例: Text("脱出ゲームアプリ", style: TextStyle(fontSize: 32, color: Colors.white, fontWeight: FontWeight.bold)),
-                  
-                  const Spacer(), // Spacer()
+                  // MARK: - エラーメッセージ表示
+                  if (_showError && _errorMessage != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Text(
+                        _errorMessage!,
+                        textAlign: TextAlign.right, // 右寄せ
+                        style: const TextStyle(
+                          color: Colors.red,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
                   
                   // MARK: - ログインボタン
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 60), // padding(.bottom, 60)
-                    child: _buildLoginButton(),
-                  ),
+                  _buildLoginButton(),
                 ],
               ),
             ),
@@ -181,30 +187,34 @@ class _LoginPageState extends State<LoginPage> {
 
   Widget _buildLoginButton() {
     // Swiftの Button { ... } に相当
-    return InkWell(
-      onTap: _isLoggingIn ? null : _login,
-      child: Container(
-        width: 280, // frame(maxWidth: 280)
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        decoration: BoxDecoration(
-          // Swiftの LinearGradient に相当
-          gradient: LinearGradient(
-            colors: [Colors.blue, Colors.blue.withOpacity(0.8)],
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-          ),
-          borderRadius: BorderRadius.circular(12), // cornerRadius(12)
-          boxShadow: [ // shadow に相当
-            BoxShadow(
-              color: Colors.black.withOpacity(0.3),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
+    return SizedBox(
+      width: 280, // ボタンの幅を固定
+      child: InkWell(
+        onTap: _isLoggingIn ? null : _login,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: double.infinity, // Containerを親の幅いっぱいに
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            // Swiftの LinearGradient に相当
+            gradient: LinearGradient(
+              colors: [Colors.blue, Colors.blue.withOpacity(0.8)],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
             ),
-          ],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
+            borderRadius: BorderRadius.circular(12), // cornerRadius(12)
+            boxShadow: [ // shadow に相当
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 8,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.max,
+            children: [
             if (_isLoggingIn)
               // ProgressView() に相当
               const SizedBox(
@@ -231,11 +241,12 @@ class _LoginPageState extends State<LoginPage> {
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 18, // headline
-                fontWeight: FontWeight.w600, // semibold
+                fontWeight: FontWeight.bold, // semibold
               ),
             ),
           ],
         ),
+      ),
       ),
     );
   }

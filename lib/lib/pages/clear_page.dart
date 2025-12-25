@@ -1,16 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:async';
-import 'dart:io';
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // 必要なサービスとモデルのインポート
 // EscapeRecord, Event, FirebaseServiceError などのクラスが必要です。
 import '../../lib/models/event.dart'; // 正規のEventモデル
+import '../../lib/models/escape_record.dart'; // EscapeRecordモデル
 import '../../firebase_service.dart';
 import '../services/firebase_service_error.dart';
-import '../models/escape_record.dart';
 
 // ⚠️ 注意: 以下のクラス/関数は、別途定義が必要です。
 // 1. IndividualEventPage (遷移先の画面)
@@ -21,7 +20,6 @@ import '../models/escape_record.dart';
 // シェア機能のインポート
 import '../utils/share_manager.dart';
 import '../utils/view_snapshot_helper.dart';
-import 'dart:typed_data';
 
 class ClearPage extends StatefulWidget {
   final String eventName;
@@ -69,26 +67,48 @@ class _ClearPageState extends State<ClearPage> {
   @override
   void initState() {
     super.initState();
-    _loadPlayerName();
+    debugPrint('✅ [ClearPage] initState: クリアページが初期化されました');
     
-    // Swiftの .task に相当: 画面表示時に自動で記録を保存
-    if (!_hasAttemptedSave) {
-      _hasAttemptedSave = true;
-      _saveEscapeRecord();
-    }
+    // 初期値を設定（非同期読み込みが完了するまでのフォールバック）
+    _playerName = 'テストプレイヤーチーム';
+    
+    // プレイヤー名を読み込んでから記録を保存
+    _loadPlayerName().then((_) {
+      // プレイヤー名が読み込まれた後に記録を保存
+      if (!_hasAttemptedSave && mounted) {
+        _hasAttemptedSave = true;
+        _saveEscapeRecord();
+      }
+    }).catchError((error) {
+      debugPrint('⚠️ [ClearPage] プレイヤー名の読み込みエラー: $error');
+      // エラーが発生した場合でも記録保存を試みる
+      if (!_hasAttemptedSave && mounted) {
+        _hasAttemptedSave = true;
+        _saveEscapeRecord();
+      }
+    });
   }
 
   // プレイヤー名を取得する（非同期処理の代用スタブ）
   Future<void> _loadPlayerName() async {
-    // 実際には shared_preferences などを使って非同期で取得する
-    // ここではデモ値としてスタブを使用
-    // final playerName = await SharedPreferences.getInstance().getString('playerName_${widget.eventId}');
-    final playerName = 'テストプレイヤーチーム'; 
+    try {
+      // 実際には shared_preferences などを使って非同期で取得する
+      final prefs = await SharedPreferences.getInstance();
+      final playerNameKey = 'playerName_${widget.eventId}';
+      final playerName = prefs.getString(playerNameKey) ?? 'テストプレイヤーチーム';
 
-    if (mounted) {
-      setState(() {
-        _playerName = playerName;
-      });
+      if (mounted) {
+        setState(() {
+          _playerName = playerName;
+        });
+      }
+    } catch (e) {
+      // エラーが発生した場合はデフォルト値を使用
+      if (mounted) {
+        setState(() {
+          _playerName = 'テストプレイヤーチーム';
+        });
+      }
     }
   }
 
@@ -103,7 +123,24 @@ class _ClearPageState extends State<ClearPage> {
 
   // Swiftの saveEscapeRecord() に相当
   Future<void> _saveEscapeRecord() async {
-    if (_isSaving || _playerName == null) return;
+    if (_isSaving) return;
+    
+    // プレイヤー名がまだ読み込まれていない場合は待つ
+    if (_playerName == null) {
+      // 少し待ってから再試行
+      await Future.delayed(const Duration(milliseconds: 100));
+      if (_playerName == null && mounted) {
+        // デフォルト値を使用
+        setState(() {
+          _playerName = 'テストプレイヤーチーム';
+        });
+      }
+    }
+    
+    // 最終的にプレイヤー名がnullの場合はデフォルト値を使用
+    final playerName = _playerName ?? 'テストプレイヤーチーム';
+    
+    if (!mounted) return;
     
     setState(() {
       _isSaving = true;
@@ -113,9 +150,8 @@ class _ClearPageState extends State<ClearPage> {
     try {
       // 1. EscapeRecordを作成 (UUIDはDartの 'uuid' パッケージで代用)
       final record = EscapeRecord(
-        // id: Uuid().v4(), // UUIDはStringとして保持するモデルを前提
         id: const Uuid().v4(),
-        playerName: _playerName!,
+        playerName: playerName,
         escapeTime: widget.escapeTime,
         completedAt: DateTime.now(),
       );
@@ -128,8 +164,10 @@ class _ClearPageState extends State<ClearPage> {
           _isSaving = false;
         });
         // 成功時の処理: 特に画面遷移はせず、この画面に留まる
+        debugPrint('✅ [ClearPage] 脱出記録を保存しました');
       }
     } on FirebaseServiceError catch (e) {
+      debugPrint('❌ [ClearPage] FirebaseServiceError: ${e.message}');
       if (mounted) {
         setState(() {
           _isSaving = false;
@@ -137,11 +175,13 @@ class _ClearPageState extends State<ClearPage> {
           _showError = true;
         });
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('❌ [ClearPage] 予期せぬエラー: $e');
+      debugPrint('スタックトレース: $stackTrace');
       if (mounted) {
         setState(() {
           _isSaving = false;
-          _saveError = '記録の保存中に予期せぬエラーが発生しました';
+          _saveError = '記録の保存中に予期せぬエラーが発生しました: ${e.toString()}';
           _showError = true;
         });
       }
@@ -203,46 +243,60 @@ class _ClearPageState extends State<ClearPage> {
   
   // Swiftの generateShareImage() / shareToAll() に相当
   Future<void> _shareToAll() async {
+    if (!mounted) return;
+    
     try {
       // 1. 共有するテキストを作成
+      final playerName = _playerName ?? 'テストプレイヤーチーム';
       var text = "「${widget.eventName}」をクリアしました！\n";
       text += "脱出タイム: ${_formatTime(widget.escapeTime)}\n";
-      if (_playerName != null) {
-        text += "プレイヤー: $_playerName\n";
-      }
+      text += "プレイヤー: $playerName\n";
       
       // 2. 画面をキャプチャして画像を取得
       if (mounted) {
-        final imageBytes = await ViewSnapshotHelper.snapshotWidget(
-          key: _captureKey,
-          pixelRatio: 3.0,
-        );
-        
-        if (imageBytes != null && imageBytes.isNotEmpty) {
-          // 3. 画像とテキストを同時にシェア
-          await ShareManager.shared.shareContent(
-            imageBytes: imageBytes,
-            text: text,
-            context: context,
-            onComplete: (completed) {
-              if (kDebugMode) {
-                print("シェア完了: $completed");
-              }
-            },
+        try {
+          final imageBytes = await ViewSnapshotHelper.snapshotWidget(
+            key: _captureKey,
+            pixelRatio: 3.0,
           );
-        } else {
-          // 画像キャプチャに失敗した場合はテキストのみシェア
-          if (kDebugMode) {
-            print("画像キャプチャに失敗したため、テキストのみシェアします");
+          
+          if (imageBytes != null && imageBytes.isNotEmpty) {
+            // 3. 画像とテキストを同時にシェア
+            await ShareManager.shared.shareContent(
+              imageBytes: imageBytes,
+              text: text,
+              context: context,
+              onComplete: (completed) {
+                if (kDebugMode) {
+                  print("シェア完了: $completed");
+                }
+              },
+            );
+          } else {
+            // 画像キャプチャに失敗した場合はテキストのみシェア
+            if (kDebugMode) {
+              print("画像キャプチャに失敗したため、テキストのみシェアします");
+            }
+            await ShareManager.shared.shareText(
+              text: text,
+              context: context,
+            );
           }
-          await ShareManager.shared.shareText(
-            text: text,
-            context: context,
-          );
+        } catch (e) {
+          // 画像キャプチャエラーの場合はテキストのみシェア
+          debugPrint('⚠️ [ClearPage] 画像キャプチャエラー: $e');
+          if (mounted) {
+            await ShareManager.shared.shareText(
+              text: text,
+              context: context,
+            );
+          }
         }
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
       // エラーが発生した場合はユーザーに通知
+      debugPrint('❌ [ClearPage] シェアエラー: $e');
+      debugPrint('スタックトレース: $stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -261,113 +315,218 @@ class _ClearPageState extends State<ClearPage> {
 
   @override
   Widget build(BuildContext context) {
+    debugPrint('✅ [ClearPage] build: クリアページを構築します');
+    
+    // エラー表示をbuild後に処理
+    if (_showError && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _showError) {
+          _showAlert(context);
+        }
+      });
+    }
+    
+    // エラーハンドリング: ビルド中にエラーが発生した場合のフォールバック
+    try {
+      return _buildScaffold(context);
+    } catch (e, stackTrace) {
+      debugPrint('❌ [ClearPage] buildエラー: $e');
+      debugPrint('スタックトレース: $stackTrace');
+      // エラーが発生した場合はシンプルなエラー画面を表示
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('エラー'),
+          automaticallyImplyLeading: false,
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 64, color: Colors.red),
+              const SizedBox(height: 16),
+              const Text(
+                'ページの表示中にエラーが発生しました',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                e.toString(),
+                style: const TextStyle(fontSize: 14, color: Colors.grey),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: widget.onDismiss,
+                child: const Text('戻る'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+  }
+  
+  Widget _buildScaffold(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final availableHeight = screenSize.height - MediaQuery.of(context).padding.top - kToolbarHeight;
+    
     return Scaffold(
       // Swiftの .navigationBarBackButtonHidden(true) に相当
       appBar: AppBar(
-        automaticallyImplyLeading: false, 
+        automaticallyImplyLeading: false,
+        backgroundColor: Colors.transparent, // 背景画像を見せるため透明に
+        elevation: 0, // 影を削除
       ),
       
       // SwiftUIの Alert に相当
       // RepaintBoundaryで画面全体を囲んでキャプチャ可能にする
       body: RepaintBoundary(
         key: _captureKey,
-        child: Builder(
-          builder: (context) {
-            if (_showError) {
-              // エラー表示後、自動で閉じるか、OKボタンでdismiss()を呼ぶ処理を実装
-              // 🚨 今回はAlertDialogとして処理
-              Future.microtask(() => _showAlert(context));
-            }
-            
-            // Swiftの VStack(spacing: 30) に相当
-            return SingleChildScrollView(
-              child: SizedBox(
-                height: MediaQuery.of(context).size.height - (Scaffold.of(context).appBarMaxHeight ?? 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                  const Spacer(),
-
-                  // 脱出成功アイコン (ZStackに相当)
-                  _buildClearIcon(),
-                  
-                  const SizedBox(height: 30),
-
-                  // タイトル
-                  const Text(
-                    "脱出成功！",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 34,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 10),
-
-                  // 説明文
-                  Text(
-                    "${widget.eventName}を\nすべてクリアしました！",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: Colors.grey[700],
-                      height: 1.4,
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 10),
-
-                  // 受付チェック指示
-                  Text(
-                    "受付スタッフにチェックボタンを押してもらってください。",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 30),
-                  
-                  // MARK: - チェックボタン
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 40),
-                    child: ElevatedButton.icon(
-                      onPressed: _isLoadingEvent ? null : _loadEventAndNavigate,
-                      icon: _isLoadingEvent 
-                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                          : const Icon(Icons.check_circle, color: Colors.white),
-                      label: Text(
-                        _isLoadingEvent ? "読み込み中..." : "チェック",
-                        style: const TextStyle(color: Colors.white, fontSize: 18),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _isLoadingEvent ? Colors.grey : Colors.green,
-                        padding: const EdgeInsets.symmetric(vertical: 18),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                    ),
-                  ),
-                  
-                  const SizedBox(height: 20),
-
-                  // MARK: - 脱出タイム表示
-                  if (_playerName != null)
-                    _buildTimeRecordCard(),
-                  
-                  const SizedBox(height: 30),
-
-                  // MARK: - シェアボタンセクション
-                  _buildShareSection(),
-                  
-                  const Spacer(),
-                  ],
-                ),
+        child: Stack(
+          children: [
+            // 背景画像
+            Positioned.fill(
+              child: Image.asset(
+                'assets/images/clear_bg.jpg',
+                fit: BoxFit.cover, // 画面全体をカバー
+                errorBuilder: (context, error, stackTrace) {
+                  // 画像が見つからない場合のフォールバック
+                  return Container(
+                    color: Colors.white,
+                  );
+                },
               ),
-            );
-          },
+            ),
+            // 半透明のオーバーレイ（テキストの可読性向上）
+            Positioned.fill(
+              child: Container(
+                color: Colors.white.withOpacity(0.3), // 30%の白いオーバーレイ
+              ),
+            ),
+            // コンテンツ
+            LayoutBuilder(
+              builder: (context, constraints) {
+                // シェア時に全体が表示される固定サイズを計算
+                // 画面の高さに合わせて、すべてのコンテンツが収まるサイズを設定
+                final fixedHeight = availableHeight;
+                
+                return SingleChildScrollView(
+                  child: Container(
+                    width: screenSize.width,
+                    constraints: BoxConstraints(
+                      minHeight: fixedHeight,
+                    ),
+                    child: Container(
+                      height: fixedHeight,
+                      padding: const EdgeInsets.only(top: 40, bottom: 20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // 上部ブロック: 画面上部に配置
+                          // 脱出成功アイコン (ZStackに相当)
+                          _buildClearIcon(),
+                          
+                          const SizedBox(height: 20),
+
+                          // タイトル（白い枠線エフェクト付き）
+                          Center(
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                // 白い枠線（ストローク）用のテキスト
+                                Text(
+                                  "脱出成功！",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 34,
+                                    fontWeight: FontWeight.bold,
+                                    foreground: Paint()
+                                      ..style = PaintingStyle.stroke
+                                      ..strokeWidth = 3
+                                      ..color = Colors.white,
+                                  ),
+                                ),
+                                // メインのテキスト（緑）
+                                const Text(
+                                  "脱出成功！",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 34,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.green,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          // スペーサー: 下部ブロックを中央付近に配置
+                          const Spacer(),
+
+                          // 下部ブロック: 現在の位置を維持（中央付近）
+                          // MARK: - 脱出タイム表示
+                          // _playerNameはinitStateで初期化されるため、常に表示可能
+                          _buildTimeRecordCard(),
+                          
+                          const SizedBox(height: 20),
+
+                          // MARK: - チェックボタン
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 40),
+                            child: ElevatedButton(
+                              onPressed: _isLoadingEvent ? null : _loadEventAndNavigate,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _isLoadingEvent ? Colors.grey : Colors.green,
+                                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // 受付チェック指示テキスト
+                                  Text(
+                                    "受付スタッフにチェックボタンを押してもらってください。",
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white.withOpacity(0.9),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  // アイコンとラベル
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      if (_isLoadingEvent)
+                                        const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                                      else
+                                        const Icon(Icons.check_circle, color: Colors.white),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        _isLoadingEvent ? "読み込み中..." : "チェック",
+                                        style: const TextStyle(color: Colors.white, fontSize: 18),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(height: 20),
+
+                          // MARK: - シェアボタンセクション
+                          _buildShareSection(),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
         ),
       ),
     );
@@ -382,8 +541,8 @@ class _ClearPageState extends State<ClearPage> {
         alignment: Alignment.center,
         children: [
           Container(
-            width: 200,
-            height: 200,
+            width: 160,
+            height: 160,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               // SwiftUIの LinearGradient に近い表現
@@ -396,7 +555,7 @@ class _ClearPageState extends State<ClearPage> {
           ),
           const Icon(
             Icons.emoji_events, // trophy.fill に相当
-            size: 100, 
+            size: 80, 
             color: Colors.yellow,
           ),
         ],
@@ -406,30 +565,70 @@ class _ClearPageState extends State<ClearPage> {
   
   // プレイヤー名とタイムのカード
   Widget _buildTimeRecordCard() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 40),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.grey.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          children: [
-            Text("プレイヤー: $_playerName", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text(
-              "脱出タイム: ${_formatTime(widget.escapeTime)}",
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.blue,
-              ),
+    // 念のためnullチェックを追加
+    final playerName = _playerName ?? 'テストプレイヤーチーム';
+    
+    return FutureBuilder<int>(
+      future: _getAttemptCount(),
+      builder: (context, snapshot) {
+        final attemptCount = snapshot.data ?? 1;
+        final playerNameWithAttempt = "$playerName ($attemptCount回目)";
+        
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 40),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
             ),
-          ],
-        ),
-      ),
+            child: Column(
+              children: [
+                // 白い枠線エフェクト付きの脱出タイム表示
+                Stack(
+                  children: [
+                    // 白い枠線（ストローク）用のテキスト
+                    Text(
+                      "脱出タイム: ${_formatTime(widget.escapeTime)}",
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        foreground: Paint()
+                          ..style = PaintingStyle.stroke
+                          ..strokeWidth = 3
+                          ..color = Colors.white,
+                      ),
+                    ),
+                    // メインのテキスト（青）
+                    Text(
+                      "脱出タイム: ${_formatTime(widget.escapeTime)}",
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text("プレイヤー: $playerNameWithAttempt", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        );
+      },
     );
+  }
+  
+  // 挑戦回数を取得
+  Future<int> _getAttemptCount() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final attemptCountKey = "attemptCount_${widget.eventId}";
+      return prefs.getInt(attemptCountKey) ?? 1;
+    } catch (e) {
+      return 1;
+    }
   }
   
   // シェアセクション
@@ -438,7 +637,6 @@ class _ClearPageState extends State<ClearPage> {
       padding: const EdgeInsets.symmetric(horizontal: 40),
       child: Column(
         children: [
-          const Text("結果をシェア", style: TextStyle(fontSize: 16, color: Colors.grey)),
           const SizedBox(height: 12),
           ElevatedButton.icon(
             onPressed: _shareToAll,
@@ -460,36 +658,33 @@ class _ClearPageState extends State<ClearPage> {
   
   // エラーアラート表示 (Swiftの .alert に相当)
   void _showAlert(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_showError) {
-        showDialog(
-          context: context,
-          builder: (dialogContext) {
-            return AlertDialog(
-              title: const Text("エラー"),
-              content: Text(_saveError ?? "不明なエラーが発生しました"),
-              actions: <Widget>[
-                TextButton(
-                  // OKを押したらメイン画面へ戻る（dismiss() に相当）
-                  onPressed: () {
-                    Navigator.of(dialogContext).pop(); // アラートを閉じる
-                    widget.onDismiss(); // 画面を閉じてメインへ
-                  },
-                  child: const Text("OK"),
-                ),
-              ],
-            );
-          },
-        ).then((_) {
-          // アラートが閉じられたら状態をリセット
-          if(mounted) {
-             setState(() {
-                _showError = false;
-                _saveError = null;
-             });
-          }
-        });
-      }
-    });
+    if (!mounted || !_showError) return;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text("エラー"),
+          content: Text(_saveError ?? "不明なエラーが発生しました"),
+          actions: <Widget>[
+            TextButton(
+              // OKを押したらメイン画面へ戻る（dismiss() に相当）
+              onPressed: () {
+                Navigator.of(dialogContext).pop(); // アラートを閉じる
+                if (mounted) {
+                  setState(() {
+                    _showError = false;
+                    _saveError = null;
+                  });
+                  widget.onDismiss(); // 画面を閉じてメインへ
+                }
+              },
+              child: const Text("OK"),
+            ),
+          ],
+        );
+      },
+    );
   }
 }

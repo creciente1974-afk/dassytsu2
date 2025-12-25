@@ -10,15 +10,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 // 必要なモデルとページのインポート
-import '../models/event.dart'; 
+import '../models/event.dart' as lib_models; // Eventモデル
+import '../models/escape_record.dart' as lib_models; // EscapeRecordモデル
 import 'player_name_registration_page.dart'; // 遷移先のページ
+import '../../game_view.dart' show GameView; // ゲームページ
+import '../../game_view.dart' as game_view; // Event, Problem, Hintクラス用
+import '../models/hint.dart' as lib_hint; // Hintモデル用
 
 // --------------------------------------------------------------------------
 // ReceptionPage
 // --------------------------------------------------------------------------
 
 class ReceptionPage extends StatefulWidget {
-  final Event event;
+  final lib_models.Event event;
 
   const ReceptionPage({super.key, required this.event});
 
@@ -83,8 +87,14 @@ class _ReceptionPageState extends State<ReceptionPage> {
 
     final eventQRCodeData = widget.event.qrCodeData;
 
+    debugPrint("📱 [ReceptionPage] イベントID: ${widget.event.id}");
+    debugPrint("📱 [ReceptionPage] イベント名: ${widget.event.name}");
+    debugPrint("📱 [ReceptionPage] QRコードデータ: $eventQRCodeData");
+    debugPrint("📱 [ReceptionPage] スキャンしたQRコード: $scannedCode");
+
     if (eventQRCodeData == null || eventQRCodeData.isEmpty) {
-      _showErrorAlert("このイベントにはQRコードが設定されていません");
+      debugPrint("❌ [ReceptionPage] QRコードデータが設定されていません");
+      _showErrorAlert("このイベントにはQRコードが設定されていません。\nイベント管理画面でQRコードを作成してください。");
       return;
     }
 
@@ -93,8 +103,12 @@ class _ReceptionPageState extends State<ReceptionPage> {
     // イベントに設定されているQRコードデータをパース
     final eventData = _parseQRCodeData(eventQRCodeData);
     
+    debugPrint("📱 [ReceptionPage] スキャンしたデータ - eventId: ${scannedData.eventId}, eventName: ${scannedData.eventName}");
+    debugPrint("📱 [ReceptionPage] イベントデータ - eventId: ${eventData.eventId}, eventName: ${eventData.eventName}");
+    
     // イベントIDとイベント名を比較
     if (scannedData.eventId == eventData.eventId && scannedData.eventName == eventData.eventName) {
+      debugPrint("✅ [ReceptionPage] QRコード認証成功");
       // 認証成功: QRコード認証状態を保存 (UserDefaultsの代替)
       final prefs = await SharedPreferences.getInstance();
       final authKey = "qrCodeAuthenticated_${widget.event.id}"; // IDはDartではString
@@ -102,17 +116,42 @@ class _ReceptionPageState extends State<ReceptionPage> {
 
       if (!mounted) return;
       
-      // 画面遷移
-      setState(() {
-        _isAuthenticating = false;
-        _shouldNavigateToRegistration = true;
-      });
-      // 認証に成功したら、PlayerNameRegistrationPageへ遷移
-      _navigateToRegistrationPage();
+      // プレイヤー名が既に登録されているかチェック（2回目以降のプレイ）
+      final playerNameKey = "playerName_${widget.event.id}";
+      final savedPlayerName = prefs.getString(playerNameKey);
+      final deviceId = prefs.getString('deviceId');
+      
+      if (savedPlayerName != null && savedPlayerName.isNotEmpty && deviceId != null && deviceId.isNotEmpty) {
+        // 2回目以降: プレイヤー名が登録済みの場合は直接ゲームページへ遷移
+        debugPrint("📱 [ReceptionPage] プレイヤー名が登録済みです。直接ゲームページへ遷移します。");
+        debugPrint("   - プレイヤー名: $savedPlayerName");
+        debugPrint("   - デバイスID: $deviceId");
+        
+        setState(() {
+          _isAuthenticating = false;
+        });
+        
+        _navigateToGamePage(deviceId);
+      } else {
+        // 初回プレイ: プレイヤー名登録ページへ遷移
+        debugPrint("📱 [ReceptionPage] 初回プレイです。プレイヤー名登録ページへ遷移します。");
+        
+        setState(() {
+          _isAuthenticating = false;
+          _shouldNavigateToRegistration = true;
+        });
+        // 認証に成功したら、PlayerNameRegistrationPageへ遷移
+        _navigateToRegistrationPage();
+      }
 
     } else {
       // 認証失敗
-      _showErrorAlert("QRコードが一致しません。正しいQRコードを読み取ってください。");
+      debugPrint("❌ [ReceptionPage] QRコード認証失敗");
+      debugPrint("   - スキャンしたeventId: ${scannedData.eventId}");
+      debugPrint("   - イベントのeventId: ${eventData.eventId}");
+      debugPrint("   - スキャンしたeventName: ${scannedData.eventName}");
+      debugPrint("   - イベントのeventName: ${eventData.eventName}");
+      _showErrorAlert("QRコードが一致しません。正しいQRコードを読み取ってください。\n\nイベントID: ${widget.event.id}\nイベント名: ${widget.event.name}");
     }
   }
   
@@ -138,6 +177,69 @@ class _ReceptionPageState extends State<ReceptionPage> {
         });
       }
     });
+  }
+
+  /// lib_models.Event を game_view.dart の Event に変換するヘルパー関数
+  game_view.Event _convertEventForGameView(lib_models.Event event) {
+    return game_view.Event(
+      id: event.id,
+      name: event.name,
+      problems: event.problems.map((p) {
+        // hintsを変換
+        List<game_view.Hint> convertedHints = [];
+        for (var h in p.hints) {
+          if (h is lib_hint.Hint) {
+            convertedHints.add(game_view.Hint(
+              id: h.id,
+              content: h.content,
+              timeOffset: h.timeOffset,
+            ));
+          } else if (h is Map) {
+            final hMap = h as Map<dynamic, dynamic>;
+            convertedHints.add(game_view.Hint(
+              id: (hMap['id'] as String?) ?? '',
+              content: (hMap['content'] as String?) ?? '',
+              timeOffset: ((hMap['timeOffset'] as num?)?.toInt()) ?? 0,
+            ));
+          }
+        }
+        
+        return game_view.Problem(
+          id: p.id,
+          text: p.text,
+          mediaURL: p.mediaURL,
+          answer: p.answer,
+          hints: convertedHints,
+          requiresCheck: p.requiresCheck,
+          checkText: p.checkText,
+          checkImageURL: p.checkImageURL,
+        );
+      }).toList(),
+      duration: event.duration,
+      targetObjectText: event.targetObjectText,
+    );
+  }
+
+  /// ゲームページへ直接遷移（2回目以降のプレイ用）
+  void _navigateToGamePage(String teamId) {
+    try {
+      // lib_models.Event を game_view.dart の Event に変換
+      final gameEvent = _convertEventForGameView(widget.event);
+      
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => GameView(
+            event: gameEvent,
+            teamId: teamId,
+          ),
+        ),
+      );
+      debugPrint("✅ [ReceptionPage] ゲームページへ遷移しました");
+    } catch (e, stackTrace) {
+      debugPrint("❌ [ReceptionPage] ゲームページへの遷移エラー: $e");
+      debugPrint("スタックトレース: $stackTrace");
+      _showErrorAlert("ゲームページへの遷移に失敗しました: $e");
+    }
   }
   
   // MARK: - ビルドメソッド

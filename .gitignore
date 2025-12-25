@@ -43,5 +43,18 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
-# API Keyを格納したファイルを無視する
+
+# API Key and Firebase configuration files
+# 環境変数ファイル
 .env
+.env.local
+.env.*.local
+
+# Firebase設定ファイル（APIキーを含む）
+# 注意: これらのファイルは通常Gitに含めますが、セキュリティのため除外することも可能です
+# チーム開発の場合は、.env.exampleファイルを作成して共有してください
+**/GoogleService-Info.plist
+**/google-services.json
+
+# APIキーがハードコードされている可能性のあるファイル
+# 注意: lib/main.dartは通常Gitに含めますが、APIキーを環境変数に移行することを推奨します

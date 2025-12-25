@@ -80,6 +80,10 @@ class _ProblemEditPageState extends State<ProblemEditPage> {
       _checkTextController.text = problem.checkText ?? "";
       _checkImageURLController.text = problem.checkImageURL ?? "";
       _requiresCheck = problem.requiresCheck;
+      // setStateを呼んでUIを更新
+      if (mounted) {
+        setState(() {});
+      }
     }
   }
 

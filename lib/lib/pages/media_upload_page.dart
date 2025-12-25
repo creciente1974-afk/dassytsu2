@@ -139,8 +139,8 @@ class _MediaUploadPageState extends State<MediaUploadPage> {
           widget.problemId,
         );
       } else {
-        // 画像のアップロード
-        uploadedUrl = await _firebaseService.uploadMediaImage(
+        // 画像のアップロード（問題画像の場合）
+        uploadedUrl = await _firebaseService.uploadReferenceImage(
           file, 
           widget.eventId, 
           widget.problemId,

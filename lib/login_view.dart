@@ -4,36 +4,33 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'lib/models/user_device_info.dart';
-import 'firebase_service.dart';
+import 'content_view.dart';
 
 class LoginView extends StatefulWidget {
-  final VoidCallback? onLoginSuccess;
-  
-  const LoginView({super.key, this.onLoginSuccess});
+  const LoginView({super.key});
 
   @override
   State<LoginView> createState() => _LoginViewState();
 }
 
 class _LoginViewState extends State<LoginView> {
-  final FirebaseService _firebaseService = FirebaseService();
-  bool _isLoading = false;
-  String? _errorMessage;
+  bool _isLoggingIn = false;
 
-  /// 端末情報を取得する関数
+  // 端末情報を取得する関数
   Future<UserDeviceInfo> _getDeviceInfo() async {
     final deviceInfoPlugin = DeviceInfoPlugin();
     
-    if (Theme.of(context).platform == TargetPlatform.android) {
+    if (Platform.isAndroid) {
       final androidInfo = await deviceInfoPlugin.androidInfo;
       return UserDeviceInfo(
         deviceId: androidInfo.id,
         deviceModel: androidInfo.model,
         systemVersion: 'Android ${androidInfo.version.release}',
-        deviceName: androidInfo.model,
+        deviceName: androidInfo.device,
       );
-    } else if (Theme.of(context).platform == TargetPlatform.iOS) {
+    } else if (Platform.isIOS) {
       final iosInfo = await deviceInfoPlugin.iosInfo;
       return UserDeviceInfo(
         deviceId: iosInfo.identifierForVendor ?? 'unknown',
@@ -41,9 +38,18 @@ class _LoginViewState extends State<LoginView> {
         systemVersion: iosInfo.systemVersion,
         deviceName: iosInfo.name,
       );
-    } else {
+    } else if (Platform.isMacOS) {
+      final macInfo = await deviceInfoPlugin.macOsInfo;
       return UserDeviceInfo(
-        deviceId: 'web_desktop_device_id',
+        deviceId: macInfo.systemGUID ?? 'macos-${DateTime.now().millisecondsSinceEpoch}',
+        deviceModel: macInfo.model ?? 'Mac',
+        systemVersion: 'macOS ${macInfo.kernelVersion}',
+        deviceName: macInfo.computerName,
+      );
+    } else {
+      // その他のプラットフォーム
+      return UserDeviceInfo(
+        deviceId: 'device-${DateTime.now().millisecondsSinceEpoch}',
         deviceModel: 'Generic Device',
         systemVersion: 'Unknown OS',
         deviceName: 'Generic Device',
@@ -51,107 +57,112 @@ class _LoginViewState extends State<LoginView> {
     }
   }
 
-  /// ログイン処理を実行
-  Future<void> _handleLogin() async {
-    if (_isLoading) return;
+  Future<void> _login(BuildContext context) async {
+    if (_isLoggingIn) return;
 
     setState(() {
-      _isLoading = true;
-      _errorMessage = null;
+      _isLoggingIn = true;
     });
 
     try {
-      // デバイス情報を取得
+      // 1. 端末情報を取得
       final deviceInfo = await _getDeviceInfo();
       
-      // Firebaseにデバイス情報を保存（ランキングに反映させるため）
-      try {
-        await _firebaseService.saveUserDeviceInfo(deviceInfo);
-        debugPrint('✅ [LoginView] デバイス情報をFirebaseに保存しました');
-      } catch (e) {
-        debugPrint('⚠️ [LoginView] Firebaseへの保存に失敗しましたが、ログインは続行します: $e');
-        // Firebaseへの保存に失敗しても、ローカルには保存してログインを続行
-      }
-      
-      // ローカルにもデバイス情報を保存
+      // 2. SharedPreferencesに保存
       final prefs = await SharedPreferences.getInstance();
+      
+      // デバイス情報をJSON形式で保存
       final encoded = jsonEncode(deviceInfo.toJson());
       await prefs.setString('userDeviceInfo', encoded);
-
+      
+      // デバイスIDをランキングのIDとして使用できるように別途保存
+      await prefs.setString('deviceId', deviceInfo.deviceId);
+      await prefs.setString('teamId', deviceInfo.deviceId); // teamIdとしても保存
+      
       if (mounted) {
-        // ログイン成功後、コールバックを呼び出してRootScreenDeciderの状態を更新
-        widget.onLoginSuccess?.call();
+        setState(() {
+          _isLoggingIn = false;
+        });
+        
+        // 3. ログイン後にContentViewに遷移
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const ContentView()),
+        );
       }
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'ログインに失敗しました: ${e.toString()}';
-      });
+      if (mounted) {
+        setState(() {
+          _isLoggingIn = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('ログインに失敗しました: $e')),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('ログイン'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // アイコン表示
-            Icon(
-              Icons.login,
-              size: 80,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 24),
-            
-            // 説明テキスト
-            const Text(
-              'ログインボタンを押して\nログインしてください',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
-              ),
-            ),
-            const SizedBox(height: 32),
-            
-            // エラーメッセージ
-            if (_errorMessage != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 16),
-                child: Text(
-                  _errorMessage!,
-                  style: const TextStyle(color: Colors.red),
-                  textAlign: TextAlign.center,
+      body: Stack(
+        children: [
+          // 背景画像
+          Positioned.fill(
+            child: Container(
+              decoration: const BoxDecoration(
+                image: DecorationImage(
+                  image: AssetImage('assets/images/clear_bg.jpg'),
+                  fit: BoxFit.cover,
                 ),
               ),
-            
-            // ログインボタン
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _isLoading ? null : _handleLogin,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text(
-                        'ログイン',
-                        style: TextStyle(fontSize: 18),
-                      ),
+              // オーバーレイで暗くする
+              child: Container(
+                color: Colors.black.withOpacity(0.3),
               ),
             ),
-          ],
-        ),
+          ),
+          // コンテンツ（下部に配置）
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 80.0, left: 16.0, right: 16.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  ElevatedButton(
+                    onPressed: _isLoggingIn ? null : () => _login(context),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: _isLoggingIn
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('ログイン'),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'ログインボタンを押して \n 開始してください',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

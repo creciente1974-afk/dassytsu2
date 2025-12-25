@@ -10,6 +10,9 @@ class Problem {
   final String answer;
   // 他のフィールドは省略...
   final List<dynamic> hints; // ヒントモデルは今回は省略
+  final bool requiresCheck;
+  final String? checkText;
+  final String? checkImageURL;
 
   Problem({
     required this.id,
@@ -17,6 +20,9 @@ class Problem {
     this.mediaURL,
     required this.answer,
     this.hints = const [],
+    this.requiresCheck = false,
+    this.checkText,
+    this.checkImageURL,
   });
 
   factory Problem.fromJson(Map<String, dynamic> json) {
@@ -26,6 +32,9 @@ class Problem {
       mediaURL: json['mediaURL'] as String?,
       answer: json['answer'] as String? ?? '',
       hints: json['hints'] as List<dynamic>? ?? [],
+      requiresCheck: json['requiresCheck'] as bool? ?? false,
+      checkText: json['checkText'] as String?,
+      checkImageURL: json['checkImageURL'] as String?,
     );
   }
 }
@@ -67,6 +76,7 @@ class Event {
   final String? overview; // 新しく追加
   final DateTime? eventDate; // 新しく追加
   final bool isVisible;
+  final String? qrCodeData; // QRコードデータ
   // その他のフィールドは省略...
 
   Event({
@@ -79,6 +89,7 @@ class Event {
     this.overview,
     this.eventDate,
     this.isVisible = true,
+    this.qrCodeData,
   });
 
   // Realtime Databaseからのパースロジック (簡略化)
@@ -125,6 +136,7 @@ class Event {
       overview: json['overview'] as String?,
       eventDate: parsedDate,
       isVisible: json['isVisible'] as bool? ?? true,
+      qrCodeData: json['qrCodeData'] as String?,
     );
   }
 }

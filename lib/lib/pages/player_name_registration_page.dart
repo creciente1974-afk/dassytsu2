@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../models/event.dart'; // Eventモデルをインポート
+import '../models/event.dart' as lib_models; // Eventモデルをインポート
+import '../models/hint.dart' as lib_hint; // Hintモデルをインポート
 import '../../firebase_service.dart'; // FirebaseServiceをインポート（仮定）
-import '../../game_view.dart' show GameView; // ゲームページをインポート
+import '../../game_view.dart' show GameView; // ゲームページをインポート（GameViewはgame_view.dartで定義されたEventを使用）
+import '../../game_view.dart' as game_view; // Event, Problem, Hintクラス用
 
 /// プレイヤー名（チーム名）を登録するページ
 class PlayerNameRegistrationPage extends StatefulWidget {
-  final Event event;
+  final lib_models.Event event;
 
   const PlayerNameRegistrationPage({
     required this.event,
@@ -27,6 +29,50 @@ class _PlayerNameRegistrationPageState extends State<PlayerNameRegistrationPage>
   bool _showError = false;
   bool _isNameDuplicate = false;
   // bool _shouldNavigateToEventDetail = false; // Flutterでは直接Navigatorで遷移
+  
+  // lib_models.Event を game_view.dart の Event に変換するヘルパー関数
+  // GameViewは game_view.dart で定義された Event を使用しているため
+  game_view.Event _convertEventForGameView(lib_models.Event event) {
+    return game_view.Event(
+      id: event.id,
+      name: event.name,
+      problems: event.problems.map((p) {
+        // hintsを変換
+        List<game_view.Hint> convertedHints = [];
+        for (var h in p.hints) {
+          if (h is lib_hint.Hint) {
+            // lib_models.Hintの場合
+            convertedHints.add(game_view.Hint(
+              id: h.id,
+              content: h.content,
+              timeOffset: h.timeOffset,
+            ));
+          } else if (h is Map) {
+            // Map型の場合（JSONからデコードされた場合など）
+            final hMap = h as Map<dynamic, dynamic>;
+            convertedHints.add(game_view.Hint(
+              id: (hMap['id'] as String?) ?? '',
+              content: (hMap['content'] as String?) ?? '',
+              timeOffset: ((hMap['timeOffset'] as num?)?.toInt()) ?? 0,
+            ));
+          }
+        }
+        
+        return game_view.Problem(
+          id: p.id,
+          text: p.text,
+          mediaURL: p.mediaURL,
+          answer: p.answer,
+          hints: convertedHints,
+          requiresCheck: p.requiresCheck,
+          checkText: p.checkText,
+          checkImageURL: p.checkImageURL,
+        );
+      }).toList(),
+      duration: event.duration,
+      targetObjectText: event.targetObjectText,
+    );
+  }
 
   // Firebase Service (仮定)
   final FirebaseService _firebaseService = FirebaseService(); 
@@ -90,15 +136,26 @@ class _PlayerNameRegistrationPageState extends State<PlayerNameRegistrationPage>
     try {
       print("🔄 [PlayerNameRegistration] プレイヤー名登録開始: $trimmedName");
       
-      // 1. 重複チェック（Firebase Serviceが実装されている前提）
-      // Swift: await firebaseService.checkPlayerNameDuplicate(...)
+      // 1. 重複チェック
       print("🔍 [PlayerNameRegistration] 重複チェック中...");
-      final isDuplicate = await _firebaseService.checkPlayerNameDuplicate(
-        trimmedName,
-        widget.event.id, // DartモデルではidはString
-      );
-
-      print("✅ [PlayerNameRegistration] 重複チェック完了: $isDuplicate");
+      bool isDuplicate;
+      try {
+        isDuplicate = await _firebaseService.checkPlayerNameDuplicate(
+          trimmedName,
+          widget.event.id,
+        );
+        print("✅ [PlayerNameRegistration] 重複チェック完了: $isDuplicate");
+      } catch (checkError) {
+        print("❌ [PlayerNameRegistration] 重複チェックでエラーが発生: $checkError");
+        // 重複チェックに失敗した場合、エラーメッセージを表示して処理を中断
+        if (mounted) {
+          _showAlertDialog("重複チェックに失敗しました。ネットワーク接続を確認して再度お試しください。\n\nエラー: $checkError");
+          setState(() {
+            _isLoading = false;
+          });
+        }
+        return;
+      }
 
       if (isDuplicate) {
         // 2. 重複あり
@@ -109,34 +166,84 @@ class _PlayerNameRegistrationPageState extends State<PlayerNameRegistrationPage>
             _isLoading = false;
           });
         }
-      } else {
-        // 3. 登録成功
-        print("✅ [PlayerNameRegistration] 名前が登録可能です。保存中...");
+        return;
+      }
+      
+      // 3. 重複なし - 登録処理を続行
+      print("✅ [PlayerNameRegistration] 名前が登録可能です。保存中...");
+      
+      // イベントに問題が設定されているかチェック
+      if (widget.event.problems.isEmpty) {
+        print("⚠️ [PlayerNameRegistration] イベントに問題が設定されていません");
+        if (mounted) {
+          _showAlertDialog("このイベントには問題が設定されていません。管理者に問い合わせてください。");
+          setState(() {
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+      
+      // デバイスIDをteamIdとして取得（ログイン時に保存されたデバイスIDを使用）
+      final prefs = await SharedPreferences.getInstance();
+      final deviceId = prefs.getString('deviceId');
+      if (deviceId == null || deviceId.isEmpty) {
+        print("⚠️ [PlayerNameRegistration] デバイスIDが見つかりません");
+        if (mounted) {
+          _showAlertDialog("デバイス情報が見つかりません。ログインし直してください。");
+          setState(() {
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+      
+      // Firebase Realtime Databaseにプレイヤー名を登録
+      try {
+        print("💾 [PlayerNameRegistration] Firebase Realtime Databaseにプレイヤー名を登録中...");
+        await _firebaseService.registerPlayerName(
+          trimmedName,
+          widget.event.id,
+          deviceId,
+        );
+        print("✅ [PlayerNameRegistration] Firebase Realtime Databaseへの登録が完了しました");
+      } catch (registerError) {
+        print("❌ [PlayerNameRegistration] Firebase Realtime Databaseへの登録に失敗: $registerError");
         
-        // イベントに問題が設定されているかチェック
-        if (widget.event.problems.isEmpty) {
-          print("⚠️ [PlayerNameRegistration] イベントに問題が設定されていません");
+        // 重複エラーの場合は、重複フラグを設定して処理を中断
+        final errorMessage = registerError.toString().toLowerCase();
+        if (errorMessage.contains('既に登録されています') || errorMessage.contains('duplicate')) {
+          print("⚠️ [PlayerNameRegistration] 登録時に重複が検出されました");
           if (mounted) {
-            _showAlertDialog("このイベントには問題が設定されていません。管理者に問い合わせてください。");
             setState(() {
+              _isNameDuplicate = true;
               _isLoading = false;
             });
           }
           return;
         }
         
-        // 名前を保存 (UserDefaultsの代替)
-        final prefs = await SharedPreferences.getInstance();
-        final key = "playerName_${widget.event.id}";
-        await prefs.setString(key, trimmedName);
-        print("💾 [PlayerNameRegistration] プレイヤー名を保存しました: $key = $trimmedName");
-        
-        // GameView（ゲームページ）へ遷移
+        // その他のエラーの場合、ローカルには保存して続行する
+        // （ネットワークエラーなどの場合、後で再試行できるように）
         if (mounted) {
+          _showAlertDialog("プレイヤー名の登録に失敗しましたが、ローカルには保存しました。\n後で再度お試しください。\n\nエラー: $registerError");
+        }
+      }
+      
+      // 名前をローカルに保存 (SharedPreferences)
+      final key = "playerName_${widget.event.id}";
+      await prefs.setString(key, trimmedName);
+      print("💾 [PlayerNameRegistration] プレイヤー名をローカルに保存しました: $key = $trimmedName");
+      
+      // 挑戦回数のカウントはGameViewのinitStateで行うため、ここでは行わない
+      
+      // GameView（ゲームページ）へ遷移
+      if (mounted) {
           print("🚀 [PlayerNameRegistration] GameViewへ遷移します");
           print("   - Event ID: ${widget.event.id}");
           print("   - Event Name: ${widget.event.name}");
-          print("   - Team ID: $trimmedName");
+          print("   - Player Name: $trimmedName");
+          print("   - Team ID (Device ID): $deviceId");
           print("   - Problems Count: ${widget.event.problems.length}");
           
           try {
@@ -153,9 +260,11 @@ class _PlayerNameRegistrationPageState extends State<PlayerNameRegistrationPage>
                 builder: (context) {
                   print("📱 [PlayerNameRegistration] GameViewを構築中...");
                   try {
+                    // lib_models.Event を game_view.dart の Event に変換
+                    final gameEvent = _convertEventForGameView(widget.event);
                     final gameView = GameView(
-                      event: widget.event,
-                      teamId: trimmedName, // 登録されたプレイヤー名をteamIdとして使用
+                      event: gameEvent,
+                      teamId: deviceId, // デバイスIDをteamIdとして使用
                     );
                     print("✅ [PlayerNameRegistration] GameViewの構築が完了しました");
                     return gameView;
@@ -182,9 +291,11 @@ class _PlayerNameRegistrationPageState extends State<PlayerNameRegistrationPage>
               });
             }
           }
-        } else {
-          print("⚠️ [PlayerNameRegistration] Widgetがマウントされていません");
-        }
+      } else {
+        print("⚠️ [PlayerNameRegistration] Widgetがマウントされていません");
+        setState(() {
+          _isLoading = false;
+        });
       }
     } catch (error, stackTrace) {
       // 4. エラー処理

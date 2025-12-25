@@ -1,6 +1,7 @@
 // event_title_edit_view.dart
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
@@ -10,6 +11,8 @@ import 'lib/models/event.dart'; // 正規のEventモデル
 import 'lib/models/escape_record.dart'; // EscapeRecordモデル
 import 'firebase_service.dart'; // FirebaseService
 import 'event_list_page.dart'; // EventListPage
+import 'services/revenuecat_service.dart'; // RevenueCatService
+import 'pages/subscription_page.dart'; // SubscriptionPage
 
 // ----------------------------------------------------
 
@@ -45,6 +48,9 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
   bool _showError = false;
   String _errorMessage = "";
   
+  // RevenueCatサービス
+  final RevenueCatService _revenueCatService = RevenueCatService();
+  
   // 画像選択関連
   File? _selectedImageFile;
   bool _isUploadingImage = false;
@@ -52,6 +58,9 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
   final ImagePicker _imagePicker = ImagePicker();
   
   final FirebaseService _firebaseService = FirebaseService();
+  
+  // ランキングリセット後のイベント状態を保持
+  Event? _resetEvent; // リセット済みのイベント（recordsが空）
 
   @override
   void initState() {
@@ -117,8 +126,77 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
     });
   }
 
+  /// Pro購入が必要な場合のダイアログを表示
+  void _showProRequiredDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Pro購入が必要です'),
+        content: const Text('イベントの作成・編集・管理機能を使用するには、脱出くん２ Proへの加入が必要です。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('キャンセル'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const SubscriptionPage(),
+                ),
+              );
+            },
+            child: const Text('Proを購入'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// イベント作成数の制限をチェック（5つまで）
+  Future<bool> _checkEventCreationLimit() async {
+    try {
+      final allEvents = await _firebaseService.getAllEvents();
+      // 現在のユーザーが作成したイベント数をカウント
+      // 注意: 現在の実装ではパスコードベースで管理されているため、
+      // ユーザーIDベースの管理に変更する必要があります
+      // ここでは簡易的に、すべてのイベント数をカウントします
+      const maxEvents = 5;
+      if (allEvents.length >= maxEvents) {
+        return false;
+      }
+      return true;
+    } catch (e) {
+      debugPrint('❌ [EventTitleEditView] Error checking event limit: $e');
+      return false;
+    }
+  }
+
   // SwiftUIの private func saveEvent() async に相当
   Future<void> _saveEvent() async {
+    // 新規イベント作成時はPro購入チェックとイベント数制限チェック
+    if (_isNewEvent) {
+      // Pro購入チェック
+      final hasPro = _revenueCatService.hasProEntitlement();
+      if (!hasPro) {
+        _showProRequiredDialog();
+        setState(() { _isSaving = false; });
+        return;
+      }
+      
+      // イベント作成数の制限チェック
+      final canCreate = await _checkEventCreationLimit();
+      if (!canCreate) {
+        setState(() {
+          _errorMessage = 'イベント作成の上限 (5件) に達しています。Pro購入が必要です。';
+          _showError = true;
+          _isSaving = false;
+        });
+        return;
+      }
+    }
+    
     final name = _eventNameController.text.trim();
     if (name.isEmpty) {
       setState(() {
@@ -185,15 +263,19 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
     }
 
     // イベントオブジェクトを更新
-    final updatedEvent = widget.event.copyWith(
+    // リセット済みのイベントがある場合は、それを使用（recordsが空の状態を保持）
+    final baseEvent = _resetEvent ?? widget.event;
+    final updatedEvent = baseEvent.copyWith(
       name: name,
       eventDate: _eventDate,
       isVisible: _isVisible,
       comment: _commentController.text.trim().isEmpty ? null : _commentController.text.trim(),
       overview: _overviewController.text.trim().isEmpty ? null : _overviewController.text.trim(),
       cardImageUrl: imageUrl,
-      creationPasscode: passcode.isNotEmpty ? passcode : widget.event.creationPasscode,
+      creationPasscode: passcode.isNotEmpty ? passcode : baseEvent.creationPasscode,
       lastUpdated: DateTime.now(),
+      // リセット済みの場合はrecordsを空配列のまま保持
+      records: _resetEvent != null ? [] : baseEvent.records,
     );
     
     // Firebaseに保存
@@ -236,7 +318,6 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
     setState(() { _isResetting = true; });
 
     final prefs = await SharedPreferences.getInstance();
-    final passcode = widget.event.creationPasscode ?? prefs.getString("currentPasscode") ?? "";
     
     // ランキング（records）を空にしてイベントを更新
     final updatedEvent = widget.event.copyWith(
@@ -245,11 +326,27 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
     );
 
     // Firebaseに保存
-    // TODO: saveEventToFirebase メソッドを実装する必要があります
-    if (_firebaseService.isConfigured && passcode.isNotEmpty) {
+    if (_firebaseService.isConfigured) {
       try {
-        // await _firebaseService.saveEventToFirebase(updatedEvent, passcode: passcode);
-        print("✅ [EventTitleEditView] ランキングリセットをFirebaseに保存しました");
+        // 1. escape_records/{eventId}を削除する（完全にリセットするため）
+        try {
+          await _firebaseService.deleteEscapeRecords(widget.event.id);
+          print("✅ [EventTitleEditView] escape_recordsを削除しました");
+        } catch (escapeRecordsError) {
+          print("⚠️ [EventTitleEditView] escape_recordsの削除でエラー: $escapeRecordsError");
+          // escape_recordsの削除に失敗しても続行
+        }
+        
+        // 2. events/{eventId}/recordsを削除する（空配列ではなく削除）
+        try {
+          await _firebaseService.deleteEventRecords(widget.event.id);
+          print("✅ [EventTitleEditView] events/recordsを削除しました");
+        } catch (recordsError) {
+          print("⚠️ [EventTitleEditView] events/recordsの削除でエラー: $recordsError");
+          // 削除に失敗した場合は空配列で保存を試みる
+          await _firebaseService.saveEvent(updatedEvent);
+          print("✅ [EventTitleEditView] ランキングリセットをFirebaseに保存しました（events/recordsを空配列に）");
+        }
       } catch (error) {
         print("⚠️ [EventTitleEditView] Firebaseへの保存でエラー: $error");
         if (mounted) {
@@ -262,7 +359,7 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
         return;
       }
     } else {
-      print("⚠️ [EventTitleEditView] Firebaseが設定されていないか、暗証番号がありません。ローカルのみに保存します。");
+      print("⚠️ [EventTitleEditView] Firebaseが設定されていません。ローカルのみに保存します。");
     }
 
     if (mounted) {
@@ -271,9 +368,25 @@ class _EventTitleEditViewState extends State<EventTitleEditView> {
       await prefs.remove(clearCheckedKey);
       print("✅ [EventTitleEditView] クリアページのチェックフラグをリセットしました: $clearCheckedKey");
       
-      setState(() { _isResetting = false; });
+      setState(() { 
+        _isResetting = false;
+        // リセット済みのイベントを保持（保存時に使用）
+        _resetEvent = updatedEvent;
+      });
+      
+      // 親に更新を通知（ただし、保存ボタンを押すまで画面は遷移しない）
       widget.onUpdate?.call(updatedEvent);
+      
+      // 成功メッセージを表示
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('ランキングをリセットしました。保存ボタンを押して変更を確定してください。'),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      
       print("✅ [EventTitleEditView] ランキングリセットが完了しました");
+      // 注意: ここでは画面遷移しない。保存ボタンを押した時に遷移する
     }
   }
 

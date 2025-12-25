@@ -1,0 +1,28 @@
+{
+  "rules": {
+    "events": {
+      ".read": true,
+      ".write": true
+    },
+    "team_progress": {
+      ".read": true,
+      ".write": true
+    },
+    "teams": {
+      ".read": true,
+      ".write": true
+    },
+    "escape_records": {
+      ".read": true,
+      ".write": true
+    },
+    "passcodes": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}
+
+
+
+

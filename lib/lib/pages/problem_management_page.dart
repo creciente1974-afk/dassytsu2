@@ -42,58 +42,68 @@ class ProblemRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 問題文
-          if (problem.text != null && problem.text!.isNotEmpty)
-            Text(
-              problem.text!,
-              style: const TextStyle(fontSize: 16.0),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            )
-          else
-            const Text(
-              '（問題文なし）',
-              style: TextStyle(fontSize: 16.0, color: Colors.grey, fontStyle: FontStyle.italic),
-            ),
-          
-          const SizedBox(height: 8),
+      padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: Colors.grey.shade300,
+            width: 1.0,
+          ),
+          borderRadius: BorderRadius.circular(8.0),
+        ),
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 問題文
+            if (problem.text != null && problem.text!.isNotEmpty)
+              Text(
+                problem.text!,
+                style: const TextStyle(fontSize: 16.0),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              )
+            else
+              const Text(
+                '（問題文なし）',
+                style: TextStyle(fontSize: 16.0, color: Colors.grey, fontStyle: FontStyle.italic),
+              ),
+            
+            const SizedBox(height: 8),
 
-          // 情報と編集ボタン
-          Row(
-            children: [
-              // メディア情報
-              if (problem.mediaURL.isNotEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(right: 8.0),
-                  child: Chip(
-                    label: Text("メディアあり", style: TextStyle(fontSize: 10)),
+            // 情報と編集ボタン
+            Row(
+              children: [
+                // メディア情報
+                if (problem.mediaURL.isNotEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 8.0),
+                    child: Chip(
+                      label: Text("メディアあり", style: TextStyle(fontSize: 10)),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      padding: EdgeInsets.zero,
+                    ),
+                  ),
+                
+                // ヒント情報
+                if (problem.hints.isNotEmpty)
+                  Chip(
+                    label: Text("ヒント: ${problem.hints.length}", style: const TextStyle(fontSize: 10)),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     padding: EdgeInsets.zero,
                   ),
+                
+                const Spacer(),
+                
+                // 編集ボタン
+                TextButton(
+                  onPressed: onEdit,
+                  child: const Text("編集"),
                 ),
-              
-              // ヒント情報
-              if (problem.hints.isNotEmpty)
-                Chip(
-                  label: Text("ヒント: ${problem.hints.length}", style: const TextStyle(fontSize: 10)),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  padding: EdgeInsets.zero,
-                ),
-              
-              const Spacer(),
-              
-              // 編集ボタン
-              TextButton(
-                onPressed: onEdit,
-                child: const Text("編集"),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -160,6 +170,12 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
 
     try {
       // FirebaseServiceには saveEvent(Event event) があると仮定
+      debugPrint("📱 [ProblemManagementPage] Firebaseに保存するイベント:");
+      debugPrint("   - ID: ${_currentEvent.id}");
+      debugPrint("   - 名前: ${_currentEvent.name}");
+      debugPrint("   - QRコードデータ: ${_currentEvent.qrCodeData}");
+      debugPrint("   - JSON: ${_currentEvent.toJson()}");
+      
       await _firebaseService.saveEvent(_currentEvent);
       debugPrint("✅ [ProblemManagementPage] Firebaseにイベントを保存しました: ${_currentEvent.id}");
 
@@ -232,33 +248,47 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
 
   /// QRコードを作成してイベントに保存
   Future<void> _createQRCode() async {
-    // 1. QRコードデータの生成
-    final qrData = QRCodeGenerator.generateQRCodeData(
-      // Swiftの event.name, event.eventDate に対応するフィールドを使用
-      eventName: _currentEvent.name,
-      eventId: _currentEvent.id,
-      // NOTE: Eventモデルに eventDate がないため、ここでは現在時刻を仮定
-      eventDate: DateTime.now(), 
-    );
-    
-    // 2. EventモデルにQRコードデータを保存（ローカル更新）
-    setState(() {
-      _currentEvent = _currentEvent.copyWith(qrCodeData: qrData);
-    });
-
-    // 3. Firebaseに保存
-    await _saveEventToFirebase();
-    
-    // 4. QRコード表示画面へ遷移
-    if (mounted) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => QRCodeDisplayPage(
-            qrCodeData: qrData,
-            eventName: _currentEvent.name,
-          ),
-        ),
+    try {
+      // 1. QRコードデータの生成
+      final qrData = QRCodeGenerator.generateQRCodeData(
+        eventName: _currentEvent.name,
+        eventId: _currentEvent.id,
+        eventDate: _currentEvent.eventDate ?? DateTime.now(), // イベントの日付を使用、なければ現在時刻
       );
+      
+      debugPrint("📱 [ProblemManagementPage] QRコードデータ生成: $qrData");
+      debugPrint("📱 [ProblemManagementPage] イベントID: ${_currentEvent.id}");
+      debugPrint("📱 [ProblemManagementPage] イベント名: ${_currentEvent.name}");
+      
+      // 2. EventモデルにQRコードデータを保存（ローカル更新）
+      setState(() {
+        _currentEvent = _currentEvent.copyWith(qrCodeData: qrData);
+      });
+      
+      debugPrint("📱 [ProblemManagementPage] ローカルイベントにQRコードデータを保存: ${_currentEvent.qrCodeData}");
+
+      // 3. Firebaseに保存
+      await _saveEventToFirebase();
+      
+      debugPrint("📱 [ProblemManagementPage] Firebaseに保存完了。QRコードデータ: ${_currentEvent.qrCodeData}");
+      
+      // 4. QRコード表示画面へ遷移
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => QRCodeDisplayPage(
+              qrCodeData: qrData,
+              eventName: _currentEvent.name,
+            ),
+          ),
+        );
+      }
+    } catch (e, stackTrace) {
+      debugPrint("❌ [ProblemManagementPage] QRコード作成エラー: $e");
+      debugPrint("スタックトレース: $stackTrace");
+      if (mounted) {
+        _showErrorAlert("QRコードの作成に失敗しました: $e");
+      }
     }
   }
 
@@ -269,6 +299,27 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
       _errorMessage = message;
       _showError = true;
     });
+  }
+
+  /// Firebaseから最新のイベントデータを再読み込み
+  Future<void> _reloadEventFromFirebase() async {
+    try {
+      final events = await _firebaseService.getAllEvents();
+      final updatedEvent = events.firstWhere(
+        (e) => e.id == _currentEvent.id,
+        orElse: () => _currentEvent, // 見つからなかった場合は現在のイベントを維持
+      );
+      
+      if (mounted) {
+        setState(() {
+          _currentEvent = updatedEvent;
+        });
+        // 親に更新を通知
+        widget.onEventUpdated(updatedEvent);
+      }
+    } catch (e) {
+      debugPrint("❌ [ProblemManagementPage] イベントの再読み込みエラー: $e");
+    }
   }
 
   /// イベントタイトル編集ページへ遷移
@@ -308,10 +359,13 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
       ),
     );
     
-    // 画面から戻ってきたら、必要に応じてリストを更新
-    // EventTitleEditView内で既にFirebaseに保存されているので、
-    // ここではローカル状態と親への通知のみ行う
-    if (mounted) {
+    // 画面から戻ってきたら、Firebaseから最新データを再読み込み
+    // ランキングリセットなどの変更が反映されるようにする
+    if (mounted && event != null) {
+      // 既存イベント編集の場合のみ再読み込み
+      await _reloadEventFromFirebase();
+    } else if (mounted) {
+      // 新規イベント作成の場合はローカル状態を通知
       widget.onEventUpdated(_currentEvent);
     }
   }
@@ -393,8 +447,8 @@ class _ProblemManagementPageState extends State<ProblemManagementPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
-            onPressed: () => _navigateToEventTitleEdit(context),
-            tooltip: '新規イベント作成',
+            onPressed: () => _navigateToProblemEdit(context, null),
+            tooltip: '新規問題作成',
           ),
         ],
       ),
